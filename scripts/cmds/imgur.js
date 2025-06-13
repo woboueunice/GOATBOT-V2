@@ -1,37 +1,67 @@
-const axios = require('axios');
+const axios = require("axios");
+const xyz = "aryan";
 
 module.exports = {
- config: {
- name: "imgur",
- version: "1.0",
- author: "ArYAN",
- countDown: 5,
- role: 0,
- shortDescription: {
- en: "Upload image to imbb"
- },
- longDescription: {
- en: "Upload image to imbb by replying to photo"
- },
- category: "tools",
- guide: {
- en: ""
- }
- },
+  config: {
+    name: "imgur",
+    version: "0.0.1",
+    author: "ArYAN",
+    countDown: 0,
+    role: 0,
+    shortDescription: "Upload an image to Imgur",
+    longDescription: "Upload any image to Imgur and receive a direct link.",
+    category: "utility",
+    guide: "{pn} reply to an image, video, or provide a URL"
+  },
 
- onStart: async function ({ api, event }) {
- const linkanh = event.messageReply?.attachments[0]?.url;
- if (!linkanh) {
- return api.sendMessage('Please reply to an image.', event.threadID, event.messageID);
- }
+  onStart: async function ({ api, event, args }) {
+    try {
+      api.setMessageReaction("⏳", event.messageID, () => {}, true);
 
- try {
- const res = await axios.get(`https://aryan-noobs-apis.onrender.com/imgur?link=${encodeURIComponent(linkanh)}`);
- const juswa = res.data.uploaded.image;
- return api.sendMessage(juswa, event.threadID, event.messageID);
- } catch (error) {
- console.log(error);
- return api.sendMessage('Failed to upload image to imbb.', event.threadID, event.messageID);
- }
- }
+      let imageUrl = "";
+
+      if (event.messageReply && event.messageReply.attachments.length > 0) {
+        imageUrl = event.messageReply.attachments[0].url;
+      } else if (args.length > 0) {
+        imageUrl = args.join(" ");
+      }
+
+      if (!imageUrl) {
+        api.setMessageReaction("", event.messageID, () => {}, true); 
+        return api.sendMessage(
+          "❌ Please reply to an image, video, or provide a URL!",
+          event.threadID,
+          event.messageID
+        );
+      }
+
+      const response = await axios.get(
+        `https://${xyz}-xy-z.vercel.app/imgur?url=${encodeURIComponent(imageUrl)}`
+      );
+
+      if (response.data && response.data.success && response.data.link) {
+        api.setMessageReaction("✅", event.messageID, () => {}, true);
+        return api.sendMessage(
+          `${response.data.link}`,
+          event.threadID,
+          event.messageID
+        );
+      } else {
+        api.setMessageReaction("", event.messageID, () => {}, true);
+        return api.sendMessage(
+          "❌ Failed to upload the image.",
+          event.threadID,
+          event.messageID
+        );
+      }
+    } catch (error) {
+      console.error(error);
+      api.setMessageReaction("", event.messageID, () => {}, true);
+      return api.sendMessage(
+        "⚠️ An error occurred while uploading the image.",
+        event.threadID,
+        event.messageID
+      );
+    }
+  }
 };
