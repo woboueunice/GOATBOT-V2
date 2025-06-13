@@ -36,7 +36,7 @@ module.exports = {
  numberSearch = 20;
  }
 
- const apiUrl = `https://aryan-noobs-apis.onrender.com/pinterest?search=${encodeURIComponent(keySearchs)}&count=${numberSearch}`;
+ const apiUrl = `https://aryan-error-api.onrender.com/pinterest?search=${encodeURIComponent(keySearchs)}&count=${numberSearch}`;
 
  const res = await axios.get(apiUrl);
  const data = res.data.data;
