@@ -1,4 +1,4 @@
-.cmd install sicbo.js module.exports = {
+module.exports = {
   config: {
     name: "sicbo",
     aliases: ["sic"],
