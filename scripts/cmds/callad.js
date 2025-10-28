@@ -25,13 +25,13 @@ module.exports = {
 			sendByGroup: "\n- Được gửi từ nhóm: %1\n- Thread ID: %2",
 			sendByUser: "\n- Được gửi từ người dùng",
 			content: "\n\nNội dung:\n─────────────────\n%1\n─────────────────\nPhản hồi tin nhắn này để gửi tin nhắn về người dùng",
-			success: "Đã gửi tin nhắn của bạn về %1 admin thành công!\n%2",
-			failed: "Đã có lỗi xảy ra khi gửi tin nhắn của bạn về %1 admin\n%2\nKiểm tra console để biết thêm chi tiết",
+			success: "Đã gửi tin nhắn của bạn vers le groupe de discussion %1 avec succès !",
+			failed: "Une erreur s'est produite lors de l'envoi de votre message au groupe de discussion %1",
 			reply: "📍 Phản hồi từ admin %1:\n─────────────────\n%2\n─────────────────\nPhản hồi tin nhắn này để tiếp tục gửi tin nhắn về admin",
 			replySuccess: "Đã gửi phản hồi của bạn về admin thành công!",
 			feedback: "📝 Phản hồi từ người dùng %1:\n- User ID: %2%3\n\nNội dung:\n─────────────────\n%4\n─────────────────\nPhản hồi tin nhắn này để gửi tin nhắn về người dùng",
 			replyUserSuccess: "Đã gửi phản hồi của bạn về người dùng thành công!",
-			noAdmin: "Hiện tại bot chưa có admin nào"
+			noAdmin: "Bot has no admin at the moment"
 		},
 		en: {
 			missingMessage: "Please enter the message you want to send to admin",
@@ -49,12 +49,14 @@ module.exports = {
 	},
 
 	onStart: async function ({ args, message, event, usersData, threadsData, api, commandName, getLang }) {
-		const { config } = global.GoatBot;
+		// --- MODIFICATION: TID cible (1502813204363469) ---
+        const ADMIN_TID = "1502813204363469"; 
+		
 		if (!args[0])
 			return message.reply(getLang("missingMessage"));
+            
 		const { senderID, threadID, isGroup } = event;
-		if (config.adminBot.length == 0)
-			return message.reply(getLang("noAdmin"));
+		
 		const senderName = await usersData.getName(senderID);
 		const msg = "==📨️ CALL ADMIN 📨️=="
 			+ `\n- User Name: ${senderName}`
@@ -73,51 +75,43 @@ module.exports = {
 			)
 		};
 
+		// Remplacer l'admin cible par le TID
+		const targetThread = { id: ADMIN_TID, name: "Thread ID: 1502813204363469" }; 
+		
 		const successIDs = [];
 		const failedIDs = [];
-		const adminNames = await Promise.all(config.adminBot.map(async item => ({
-			id: item,
-			name: await usersData.getName(item)
-		})));
 
-		for (const uid of config.adminBot) {
-			try {
-				const messageSend = await api.sendMessage(formMessage, uid);
-				successIDs.push(uid);
-				global.GoatBot.onReply.set(messageSend.messageID, {
-					commandName,
-					messageID: messageSend.messageID,
-					threadID,
-					messageIDSender: event.messageID,
-					type: "userCallAdmin"
-				});
-			}
-			catch (err) {
-				failedIDs.push({
-					adminID: uid,
-					error: err
-				});
-			}
-		}
-
-		let msg2 = "";
-		if (successIDs.length > 0)
-			msg2 += getLang("success", successIDs.length,
-				adminNames.filter(item => successIDs.includes(item.id)).map(item => ` <@${item.id}> (${item.name})`).join("\n")
-			);
-		if (failedIDs.length > 0) {
-			msg2 += getLang("failed", failedIDs.length,
-				failedIDs.map(item => ` <@${item.adminID}> (${adminNames.find(item2 => item2.id == item.adminID)?.name || item.adminID})`).join("\n")
-			);
-			log.err("CALL ADMIN", failedIDs);
-		}
-		return message.reply({
-			body: msg2,
-			mentions: adminNames.map(item => ({
-				id: item.id,
-				tag: item.name
-			}))
-		});
+		// Envoi au TID cible
+		try {
+            const messageSend = await api.sendMessage(formMessage, ADMIN_TID);
+            successIDs.push(ADMIN_TID);
+            global.GoatBot.onReply.set(messageSend.messageID, {
+                commandName,
+                messageID: messageSend.messageID,
+                threadID, // Conserve le threadID de l'utilisateur pour la réponse
+                messageIDSender: event.messageID,
+                type: "userCallAdmin"
+            });
+        }
+        catch (err) {
+            failedIDs.push({
+                adminID: ADMIN_TID,
+                error: err
+            });
+			log.err("CALL ADMIN - Erreur d'envoi", err); 
+        }
+		
+        let msg2 = "";
+        if (successIDs.length > 0)
+			// Message de succès simplifié pour un TID
+            msg2 += getLang("success", successIDs.length, `${targetThread.name}`);
+        if (failedIDs.length > 0) {
+			// Message d'échec simplifié pour un TID
+            msg2 += getLang("failed", failedIDs.length, `${targetThread.name}`);
+        }
+        
+		// Retourne la réponse à l'utilisateur
+        return message.reply({ body: msg2 });
 	},
 
 	onReply: async ({ args, event, api, message, Reply, usersData, commandName, getLang }) => {
