@@ -32,18 +32,12 @@ const TimePrefixes = [
 
 /**
  * Fonction pour obtenir l'heure et la date pour un lieu donné.
- * Dans un vrai bot, ceci utiliserait une API de géolocalisation/fuseau horaire.
- * Ici, nous simulons une requête ou utilisons la fonction google:search si disponible.
  * @param {string} location - Ville ou pays.
  * @returns {Promise<string>} - Chaîne formatée de l'heure et de la date.
  */
 async function getDateTimeForLocation(location) {
     try {
-        // Dans un environnement réel avec un moteur de recherche, nous ferions ceci:
-        // const response = await google.search(`heure et date actuelles à ${location}`);
-        // return response.text; 
-
-        // Simulation de recherche factuelle via l'API IA pour rester dans le même environnement.
+        // Simulation de recherche factuelle via l'API IA
         const apiUrl = `${AI_API_URL}?query=${encodeURIComponent(`Quelle est l'heure et la date actuelles précises dans la ville de ${location}? Réponds uniquement avec l'heure et la date, sans autres phrases.`)}`;
         const response = await axios.get(apiUrl);
 
@@ -59,7 +53,7 @@ async function getDateTimeForLocation(location) {
         const now = new Date();
         const fallbackTime = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' });
         const fallbackDate = now.toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-        return `Je n'ai pas pu obtenir l'heure précise pour ${location}, ${now.toLocaleTimeString('fr-FR', { timeZoneName: 'long' })}. Vous pouvez le vérifier en ligne.`;
+        return `Je n'ai pas pu obtenir l'heure précise pour ${location}. Voici mon heure locale : ${now.toLocaleTimeString('fr-FR', { timeZoneName: 'long' })}.`;
 
     } catch (error) {
         console.error("Erreur lors de la récupération de l'heure/date:", error.message);
@@ -88,7 +82,7 @@ async function getUserName(api, senderID) {
 module.exports = {
   config: {
     name: "ask",
-    version: 2.8, // Mise à jour de la version pour les nouvelles fonctionnalités
+    version: 2.8,
     author: "Tk Joel",
     longDescription: "AI avec mémoire, personnalité, conversation par réponse, heure mondiale et recherche (2025).",
     category: "ai",
@@ -98,11 +92,13 @@ module.exports = {
   },
   onStart: async function () {},
   onChat: async function ({ api, event, args, message }) {
+    let waitingMessageID = null; // Déclaration en haut du bloc pour être accessible dans try et catch
+    const userMessageID = event.messageID; // Pour la réaction
+
     try {
       
       const senderID = event.senderID;
       const threadID = event.threadID; 
-      const userMessageID = event.messageID; 
       let prompt = event.body ? event.body.trim() : "";
       let isReplyToBot = false;
 
@@ -121,7 +117,6 @@ module.exports = {
       // B) Détection du préfixe
       let prefix = null;
       if (!isReplyToBot) {
-          prefix = Prefixes.find((p) => event.body && event.body.toLowerCase().startsWith(p));
           
           // Vérification des préfixes d'heure
           const timePrefix = TimePrefixes.find((p) => event.body && event.body.toLowerCase().startsWith(p));
@@ -143,6 +138,9 @@ module.exports = {
               return; // Terminer après l'horloge
           }
           
+          // Vérification des préfixes standard
+          prefix = Prefixes.find((p) => event.body && event.body.toLowerCase().startsWith(p));
+          
           if (!prefix) {
             return; // Ni préfixe standard ni réponse au bot, ignorer
           }
@@ -163,7 +161,6 @@ module.exports = {
       }, true); 
 
       // Envoi du message d'attente
-      let waitingMessageID = null;
       api.sendMessage("💬🧘🏾‍♂|veuillez Patientez s'il-vous-plait...(𝙀́𝙙𝙞𝙩 𝙗𝙮 𝙏𝙠 𝙅𝙤𝙚𝙡 ㋡)", threadID, (err, info) => {
           if (!err && info && info.messageID) {
               waitingMessageID = info.messageID;
@@ -192,13 +189,12 @@ module.exports = {
           `Tu es ARYAN, une IA amicale et serviable. ` + 
           `Ton créateur est Joel, un passionné d'informatique qui vit au Cameroun. ` + 
           `Tu dois répondre en Français. ` + 
-          `**INFORMATION IMPORTANTE :** La date actuelle est le **${currentDate}**. ` + // Injection forte de l'année 2025
+          `**INFORMATION IMPORTANTE :** La date actuelle est le **${currentDate}**. ` + 
           `Tu as la capacité d'effectuer des recherches sur Internet pour répondre aux questions factuelles récentes. ` + 
           `Tu dois intégrer le nom de l'utilisateur (${userName}) dans ta réponse de façon naturelle. ` + 
           `Son nom est ${userName}.`;
       
       // Injection de l'historique (Mémoire)
-      // On utilise les 3 derniers échanges (6 entrées) pour un contexte riche et léger.
       const historyText = conversationHistory[senderID].slice(-3).map(h => `[Moi: ${h.userPrompt}] [Toi: ${h.aiResponse}]`).join('; ');
       
       if (historyText) {
@@ -290,65 +286,5 @@ module.exports = {
       }, true);
     }
   }
-};      const userName = await getUserName(api, senderID);
-
-      // 3. Gestion de l'historique et du prompt pour la mémoire
-      if (!conversationHistory[senderID]) {
-          conversationHistory[senderID] = [];
-      }
-
-      const historyText = conversationHistory[senderID].slice(-5).map(h => `[Moi]: ${h.userPrompt}\n[IA]: ${h.aiResponse}`).join('\n');
-      
-      let fullPrompt = `L'utilisateur ${userName} demande : "${prompt}".`;
-      if (historyText) {
-          fullPrompt = `Historique de conversation avec ${userName} :\n${historyText}\n[Moi]: ${prompt}\n[IA]:`;
-      }
-
-      // --- APPEL DE L'API IA ---
-      const response = await axios.get(`https://sandipbaruwal.onrender.com/gpt?prompt=${encodeURIComponent(fullPrompt)}`);
-      let answer = response.data.answer;
-
-      // **********************************************
-      // NOUVELLE TENTATIVE 2 : Supprimer le message d'attente (unsendMessage)
-      // **********************************************
-      if (waitingMessageID) {
-          api.unsendMessage(waitingMessageID, (err) => {
-              if (err) console.error("unsendMessage Error:", err);
-          });
-      }
-
-      // 4. Stocker le nouvel échange pour la mémoire
-      conversationHistory[senderID].push({
-          userPrompt: prompt,
-          aiResponse: answer,
-          timestamp: Date.now()
-      });
-
-      // 5. Préparation et envoi de la réponse finale
-      const finalAnswer = `[Réponse pour ${userName}]:\n${answer}`;
-
-      let finalMessageID = null;
-      api.sendMessage(finalAnswer, threadID, (err, info) => {
-          if (!err && info && info.messageID) {
-              finalMessageID = info.messageID;
-              // 6. Stocker l'ID du message du bot pour la conversation par référence
-              botMessageIDs.add(finalMessageID);
-          } else if (err) {
-              console.error("Error sending final message:", err);
-          }
-
-          // **********************************************
-          // NOUVELLE TENTATIVE 3 : Changer la réaction pour ✅ (dans le callback)
-          // **********************************************
-          api.setMessageReaction('✅', userMessageID, (err) => {
-              if (err) console.error("Reaction ✅ Error:", err);
-          }, true);
-      });
-      
-    } catch (error) {
-      console.error("Error:", error.message);
-      // S'assurer que le message d'erreur est envoyé si l'API IA échoue
-      api.sendMessage(`Une erreur est survenue lors du traitement de la requête : ${error.message}`, event.threadID);
-    }
-  }
 };
+                 
