@@ -28,7 +28,7 @@
   "nickNameBot": "💬»𝗔ryan-Bot",
   "prefix": ".",
   "database": {
-    "type": "mongodb",
+    "type": "sqlite",
     "uriMongodb": "mongodb+srv://fbicater_db_user:bar6MpW3McZQ3EJO@goatbot-v2.vcjzs6f.mongodb.net/?appName=Goatbot-v2",
     "autoSyncWhenStart": true,
     "autoRefreshThreadInfoFirstTime": true,
