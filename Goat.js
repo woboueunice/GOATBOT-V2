@@ -65,26 +65,6 @@ if (config.whiteListMode?.whiteListIds && Array.isArray(config.whiteListMode.whi
 	config.whiteListMode.whiteListIds = config.whiteListMode.whiteListIds.map(id => id.toString());
 const configCommands = require(dirConfigCommands);
 
-// --- ⚠️ INJECTION DE CODE POUR LA PERSISTANCE (Ligne ajoutée) ⚠️ ---
-
-const MONGO_URI_FROM_RENDER = process.env.MONGO_URI; 
-
-// Si l'URI secrète est présente (elle vient de Render)
-if (MONGO_URI_FROM_RENDER) {
-    try {
-        log.info("DATABASE", "Forcing MongoDB configuration using MONGO_URI from Render.");
-        
-        // Écraser les valeurs dans l'objet 'config' chargé
-        config.database.type = "mongodb";
-        config.database.uriMongodb = MONGO_URI_FROM_RENDER;
-
-    } catch (e) {
-        log.error("DATABASE", "CRITICAL ERROR: Failed to inject MONGO_URI into configuration object.", e);
-    }
-}
-
-// --- FIN DE L'INJECTION ---
-
 global.GoatBot = {
 	startTime: Date.now() - process.uptime() * 1000, // time start bot (ms)
 	commands: new Map(), // store all commands
@@ -319,5 +299,5 @@ function compareVersion(version1, version2) {
 			return -1; // version1 < version2
 	}
 	return 0; // version1 = version2
-						 }
-		
+}
+	
