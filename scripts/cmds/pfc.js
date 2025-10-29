@@ -11,7 +11,7 @@ module.exports = {
 	config: {
 		name: "pfc",
 		version: "3.2", // Version finale compilée
-		author: "Joel",
+		author: "Joel & Gemini",
 		countDown: 5,
 		role: 0, 
 		description: {
@@ -73,7 +73,20 @@ module.exports = {
             senderID,
             type: "pfcModeSelect"
         });
-        return message.reply(getLang("modeSelect"));
+        // Utilisation de api.sendMessage pour pouvoir capturer l'ID du message du bot
+        api.sendMessage(getLang("modeSelect"), event.threadID, (err, info) => {
+            if (err) return log.err(err);
+
+            // Mettre à jour l'ID de réponse avec l'ID du message du bot
+            global.GoatBot.onReply.set(info.messageID, {
+                commandName,
+                messageID: info.messageID, // <-- L'ID de l'objet onReply est l'ID du message du BOT
+                senderID,
+                type: "pfcModeSelect"
+            });
+            global.GoatBot.onReply.delete(event.messageID); // Supprime l'ancienne entrée basée sur le message utilisateur
+
+        }, event.messageID); // Répond au message original de l'utilisateur
 	},
 
 	onReply: async ({ args, event, message, Reply, commandName, getLang, usersData, api, threadsData }) => {
@@ -86,10 +99,13 @@ module.exports = {
              // Seules les étapes secrètes peuvent être répondues par le joueur 2
              return; 
         }
+        
+        // Rendre la réponse de l'utilisateur plus robuste
+        const userResponse = event.body?.trim() || "";
+        const mode = userResponse.toLowerCase();
 
         // --- PHASE 2: RÉPONSE À LA SÉLECTION DE MODE ---
         if (type === "pfcModeSelect") {
-            const mode = args[0];
             
             if (mode === "1") {
                 global.GoatBot.onReply.delete(messageID);
@@ -107,14 +123,18 @@ module.exports = {
             }
         }
         
+        // Le reste de la fonction onReply est maintenu, mais les variables `args` doivent être utilisées avec précaution
+        // car l'utilisateur répond directement au message, le texte est dans `event.body` ou `args[0]` est le premier mot.
+
         // --- PHASE 3 : CAPTURE DE L'ADVERSAIRE (GUIDÉ) ---
         if (type === "pfcSelectOpponent") {
-            let targetID = event.mentions[0]?.id || args[0];
+            // Utiliser args[0] est correct pour l'UID/Mention
+            let targetID = event.mentions[0]?.id || args[0]; 
             
             if (!targetID || targetID === currentSenderID) {
                 return message.reply(getLang("invalidOpponent"));
             }
-
+            
             // Vérifie si l'ID est valide (un utilisateur connu)
             try {
                 const targetName = await usersData.getName(targetID);
@@ -162,7 +182,8 @@ module.exports = {
         
         // --- PHASE 5 : CONFIRMATION DU DÉFI P2P (Mot-clé 'player1') ---
         if (type === "pfcChallengeConfirm") {
-            const keyword = args[0]?.toLowerCase();
+            // Utilisation de event.body pour capturer la réponse entière
+            const keyword = event.body?.trim().toLowerCase(); 
             const senderName = await usersData.getName(currentSenderID);
             const originalThreadID = Reply.originalThreadID;
             
@@ -193,26 +214,38 @@ module.exports = {
                 + (await usersData.getName(Reply.player2ID)) 
                 + ".\n\nMise : " + Reply.betAmount.toLocaleString() + "$\n\n➡️ Faites votre choix maintenant en répondant à ce message avec :\n**pfc pierre**\n**pfc feuille**\n**pfc ciseaux**";
             
-            const messageSend = await api.sendMessage(instructionMsgJ1, TID_PLAYER1_SECRET);
-            
-            // 3. Mettre à jour la Reply pour le choix J1 (basé sur le message secret)
-            newReply.messageID = messageSend.messageID;
-            global.GoatBot.onReply.set(messageSend.messageID, newReply);
-            global.GoatBot.onReply.delete(messageID); // Supprime l'ancienne reply du groupe original
+            // Utilisation de api.sendMessage pour le groupe secret
+            api.sendMessage(instructionMsgJ1, TID_PLAYER1_SECRET, (err, messageSend) => {
+                 if (err) return log.err(err);
+                 
+                 // 3. Mettre à jour la Reply pour le choix J1 (basé sur le message secret)
+                newReply.messageID = messageSend.messageID;
+                global.GoatBot.onReply.set(messageSend.messageID, newReply);
+                global.GoatBot.onReply.delete(messageID); // Supprime l'ancienne reply du groupe original
+            });
 
             return;
         }
 
         // --- PHASE 6 & 7 (Choix Secrets J1 & J2) ---
         if (type === "pfcSecretChoice1" || type === "pfcSecretChoice2") {
-             return handleSecretChoice({ args, event, message, Reply, commandName, getLang, usersData, api, threadsData });
+             // Dans les groupes secrets, l'utilisateur tapera la commande complète (pfc pierre), 
+             // donc le handler doit être sur la commande pfc.
+             // On utilise event.body car il sera du type "pfc choix"
+             const userChoice = args[0]?.toLowerCase();
+             
+             if (!userChoice || !CHOICES.includes(userChoice)) {
+                 return message.reply(getLang("invalidChoice"));
+             }
+             
+             return handleSecretChoice({ choice: userChoice, event, message, Reply, commandName, getLang, usersData, api, threadsData });
         }
 	}
 };
 
 
 // ----------------------------------------------------------------------------------
-// --- FONCTIONS EXTERNES ---
+// --- FONCTIONS EXTERNES (PAS DE CHANGEMENT MAJEUR) ---
 // ----------------------------------------------------------------------------------
 
 /**
@@ -251,7 +284,7 @@ async function startP2PChallenge({ message, event, api, commandName, getLang, us
     
     const formMessage = {
         body: challengeMessage,
-        mentions: [{ tag: senderName, id: senderID }]
+        mentions: [{ tag: targetName, id: targetID }] // Mentionner l'adversaire
     };
 
     api.sendMessage(formMessage, event.threadID, (err, info) => {
@@ -346,57 +379,57 @@ async function startBotGame({ args, message, event, api, commandName, getLang, u
 /**
  * Gère les étapes de choix secret J1 et J2 (dans les threads secrets).
  */
-async function handleSecretChoice({ args, event, message, Reply, commandName, getLang, usersData, api, threadsData }) {
+async function handleSecretChoice({ choice, event, message, Reply, commandName, getLang, usersData, api, threadsData }) {
     const { type, player1ID, player2ID, betAmount, player1Choice, originalThreadID, originalMessageID } = Reply;
     const currentSenderID = event.senderID;
+    const playerChoice = choice; // Le choix de l'utilisateur qui répond
     
     const player1Name = await usersData.getName(player1ID);
     const player2Name = await usersData.getName(player2ID);
     
     // --- PHASE 6: CHOIX SECRET J1 (dans le groupe secret J1) ---
     if (type === "pfcSecretChoice1" && currentSenderID === player1ID) {
-        const player1Choice_ = args[0]?.toLowerCase();
-        
-        if (!player1Choice_ || !CHOICES.includes(player1Choice_)) {
-            return message.reply(getLang("invalidChoice"));
-        }
         
         // Met à jour la Reply avec le choix J1
         const newReply = {
             ...Reply,
-            player1Choice: player1Choice_,
+            player1Choice: playerChoice,
             type: "pfcSecretChoice2" // Prochaine étape : Choix secret J2
         };
         
         // 1. Retourner au groupe original pour notifier J2
         const messageOriginal = getLang("challengeWait", player1Name, player2Name);
-        const msgToOriginal = await api.sendMessage(messageOriginal, originalThreadID);
+        let msgToOriginal = null;
+        
+        // Envoi au groupe original
+        await api.sendMessage(messageOriginal, originalThreadID, (err, info) => {
+            if (err) return log.err(err);
+            msgToOriginal = info.messageID;
+        });
 
         // 2. Envoyer le message d'instruction au groupe secret du J2
         const instructionMsgJ2 = "🔒 **ZONE DE CHOIX SECRÈTE**\n\nC'est votre tour. Vous jouez contre " 
             + player1Name 
             + ".\n\nMise : " + betAmount.toLocaleString() + "$\n\n➡️ Faites votre choix maintenant en répondant à ce message avec :\n**pfc pierre**\n**pfc feuille**\n**pfc ciseaux**";
         
-        const messageSendJ2 = await api.sendMessage(instructionMsgJ2, TID_PLAYER2_SECRET);
+        await api.sendMessage(instructionMsgJ2, TID_PLAYER2_SECRET, (err, messageSendJ2) => {
+             if (err) return log.err(err);
+             
+            // 3. Mettre à jour la Reply pour le choix J2 (basé sur le message secret J2)
+            newReply.messageID = messageSendJ2.messageID;
+            newReply.originalMessageID = msgToOriginal; // Pour la suppression/update
+            
+            global.GoatBot.onReply.set(messageSendJ2.messageID, newReply);
+            global.GoatBot.onReply.delete(Reply.messageID); // Supprime l'ancienne reply du groupe J1
+        });
         
-        // 3. Mettre à jour la Reply pour le choix J2 (basé sur le message secret J2)
-        newReply.messageID = messageSendJ2.messageID;
-        newReply.originalMessageID = msgToOriginal.messageID; // Pour la suppression/update
-        
-        global.GoatBot.onReply.set(messageSendJ2.messageID, newReply);
-        global.GoatBot.onReply.delete(Reply.messageID); // Supprime l'ancienne reply du groupe J1
-
         return;
     }
 
-    // --- PHASE 7: CHOIX SECRET J2 (dans le groupe secret J2) et FIN ---
+        // --- PHASE 7: CHOIX SECRET J2 (dans le groupe secret J2) et FIN ---
     if (type === "pfcSecretChoice2" && currentSenderID === player2ID) {
-        const player2Choice = args[0]?.toLowerCase();
+        const player2Choice = playerChoice;
         
-        if (!player2Choice || !CHOICES.includes(player2Choice)) {
-            return message.reply(getLang("invalidChoice"));
-        }
-
         // Nettoie l'entrée onReply car le jeu est terminé
         global.GoatBot.onReply.delete(Reply.messageID);
         
@@ -453,3 +486,142 @@ async function handleSecretChoice({ args, event, message, Reply, commandName, ge
         return message.reply(`❌ Veuillez répondre uniquement par votre choix de PFC (**pierre, feuille, ciseaux**) au message d'instruction.`);
     }
 }
+
+// ----------------------------------------------------------------------------------
+// --- FONCTIONS EXTERNES ---
+// ----------------------------------------------------------------------------------
+
+/**
+ * Lance le jeu PFC en mode Tournoi Secret P2P.
+ */
+async function startP2PChallenge({ message, event, api, commandName, getLang, usersData, betAmount, targetID, threadsData }) {
+    const TID_PLAYER1_SECRET = "1504157924123016"; // Doit être déclaré dans le scope si non global
+    const TID_PLAYER2_SECRET = "1570824117702200"; // Doit être déclaré dans le scope si non global
+    
+    const senderID = event.senderID;
+    
+    if (targetID === senderID) {
+        return message.reply(getLang("noSelfChallenge"));
+    }
+    
+    const senderName = await usersData.getName(senderID);
+    const senderMoney = await usersData.getMoney(senderID);
+    const targetName = await usersData.getName(targetID);
+    const targetMoney = await usersData.getMoney(targetID);
+    
+    // Vérifications
+    if (senderMoney < betAmount) {
+        return message.reply(getLang("notEnoughMoney", betAmount.toLocaleString(), senderMoney.toLocaleString()));
+    }
+    if (targetMoney < betAmount) {
+        return message.reply(getLang("opponentNotEnoughMoney", targetName, betAmount.toLocaleString()));
+    }
+    
+    // 🚨 PRÉLÈVEMENT DES MISES
+    try {
+        await usersData.subtractMoney(senderID, betAmount); 
+        await usersData.subtractMoney(targetID, betAmount);
+    } catch (e) {
+        return message.reply("Une erreur critique est survenue lors du prélèvement des mises. Annulation du défi.");
+    }
+    
+    // Défi : Le J1 doit répondre par 'player1'
+    const challengeMessage = getLang("challengeSentSecret", targetName, betAmount.toLocaleString(), senderName);
+    
+    const formMessage = {
+        body: challengeMessage,
+        mentions: [{ tag: targetName, id: targetID }] // Mentionner l'adversaire
+    };
+
+    api.sendMessage(formMessage, event.threadID, (err, info) => {
+        if (err) return log.err(err);
+
+        global.GoatBot.onReply.set(info.messageID, {
+            commandName,
+            messageID: info.messageID,
+            player1ID: senderID, 
+            player2ID: targetID, 
+            betAmount: betAmount, 
+            type: "pfcChallengeConfirm", // Prochaine étape : Confirmation du défi
+            time: Date.now() + (5 * 60 * 1000), 
+            originalThreadID: event.threadID
+        });
+        
+    }, event.messageID); 
+}
+
+/**
+ * Lance le jeu PFC en mode Bot.
+ */
+async function startBotGame({ args, message, event, api, commandName, getLang, usersData, prefix }) {
+    // CHOICES doit être accessible
+    const CHOICES = ["pierre", "feuille", "ciseaux"]; 
+
+    const userChoice = args[0] ? args[0].toLowerCase() : null;
+    const betAmount = parseInt(args[1]);
+    const senderID = event.senderID;
+    
+    const senderMoney = await usersData.getMoney(senderID);
+
+    if (isNaN(betAmount) || betAmount <= 0) {
+        return message.reply(getLang("invalidBet", { pn: prefix + commandName }));
+    }
+    if (senderMoney < betAmount) {
+        return message.reply(getLang("notEnoughMoney", betAmount.toLocaleString(), senderMoney.toLocaleString()));
+    }
+
+    if (!userChoice || !CHOICES.includes(userChoice)) {
+        return message.reply(getLang("invalidChoice"));
+    }
+    
+    // Retirer la mise avant de jouer
+    await usersData.subtractMoney(senderID, betAmount);
+    
+    const botChoice = CHOICES[Math.floor(Math.random() * CHOICES.length)];
+    
+    let result, winningItem, losingItem;
+
+    if (userChoice === botChoice) {
+        // Retourner la mise en cas d'égalité
+        await usersData.addMoney(senderID, betAmount);
+        return message.reply(getLang("draw", botChoice, betAmount.toLocaleString()));
+    }
+
+    if (
+        (userChoice === "pierre" && botChoice === "ciseaux") ||
+        (userChoice === "feuille" && botChoice === "pierre") ||
+        (userChoice === "ciseaux" && botChoice === "feuille")
+    ) {
+        result = "userWin";
+        winningItem = userChoice;
+        losingItem = botChoice;
+    } else {
+        result = "botWin";
+        winningItem = botChoice;
+        losingItem = userChoice;
+    }
+    
+    let finalMessage = "";
+    
+    // Gestion des Gains/Pertes
+    if (result === "userWin") {
+        const winAmount = betAmount * 2; // Récupère la mise + double le montant
+        let finalWinAmount = winAmount;
+
+        // 🚨 Défi Casino : 20% de chance de doubler le gain
+        if (Math.random() < 0.20) { 
+            finalWinAmount = betAmount * 4; // Quadruple la mise
+            finalMessage += getLang("casinoRule") + "\n";
+        }
+        
+        await usersData.addMoney(senderID, finalWinAmount);
+        finalMessage += getLang("userWin", botChoice, winningItem, losingItem, finalWinAmount.toLocaleString());
+
+    } else { // botWin
+        // L'argent est déjà soustrait (perdu)
+        finalMessage = getLang("botWin", botChoice, winningItem, losingItem, betAmount.toLocaleString());
+    }
+
+    return message.reply(finalMessage);
+			}
+							   
