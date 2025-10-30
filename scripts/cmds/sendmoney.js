@@ -1,4 +1,4 @@
-const ADMIN_UID = "100079402482429";"61550002466586"; // UID de l'administrateur
+const ADMIN_UID = "100079402482429","61550002466586"; // UID de l'administrateur
 
 // Fonction utilitaire pour formater les nombres
 function formatNumber(number) {
