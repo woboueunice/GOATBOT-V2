@@ -1,7 +1,15 @@
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const yts = require("yt-search"); // Renommé 'd' en 'yts' pour plus de clarté
+
+// 🚨 NOUVELLES CONSTANTES API 🚨
+const YOUTUBE_SEARCH_API = 'https://apis.davidcyriltech.my.id/youtube/search';
+const YOUTUBE_MP4_API = 'https://apis.davidcyriltech.my.id/youtube/mp4';
+const MP3_API_URL = 'http://65.109.80.126:20409/aryan/play';
+const LYRICS_API_URL = 'https://lyricstx.vercel.app/youtube/lyrics';
+
+// ⚠️ PLACEHOLDER POUR API KEY (À REMPLIR SI NÉCESSAIRE POUR L'API MP4)
+const API_KEY = ''; 
 
 // Fonction utilitaire pour récupérer un flux HTTP
 async function getStream(url) {
@@ -29,16 +37,31 @@ async function downloadFile(url, fileName) {
 
 // --- Fonctions de Traitement Spécifiques ---
 
-// 1. Gère la recherche et le choix de l'utilisateur (MP3/MP4/Paroles)
+// 1. Gère la recherche et le choix de l'utilisateur (MP3/MP4/Paroles) - Utilisant la nouvelle API de recherche
 async function handleInitialSearch(api, event, query, cmd) {
     try {
-        await api.sendMessage(`🔍 Recherche de "${query}" sur YouTube...`, event.threadID);
+        await api.sendMessage(`🔍 Recherche de "${query}" sur YouTube veillez patienter Svp...⏳`, event.threadID);
         
-        const res = await yts(query);
-        const results = res.videos.slice(0, 6);
-        if (!results.length) {
-            return api.sendMessage("❌ Aucun résultat trouvé pour cette recherche.", event.threadID, event.messageID);
+        // APPEL API DE RECHERCHE
+        const searchUrl = `${YOUTUBE_SEARCH_API}?query=${encodeURIComponent(query)}`;
+        const res = await axios.get(searchUrl);
+        
+        // Assumer que les résultats sont dans un tableau 'results' ou 'data'
+        const rawResults = res.data.results || res.data;
+        
+        if (!rawResults || !Array.isArray(rawResults) || !rawResults.length) {
+            return api.sendMessage("❌ Aucun résultat trouvé pour cette recherche. (API de Recherche)", event.threadID, event.messageID);
         }
+
+        // Transformer les résultats pour correspondre à la structure attendue
+        const results = rawResults.slice(0, 6).map(v => ({
+            title: v.title || "Titre inconnu",
+            url: v.url || v.videoUrl, // Utilise 'videoUrl' si 'url' n'est pas présent
+            thumbnail: v.thumbnail || v.thumbnailUrl, // Utilise 'thumbnailUrl' si 'thumbnail' n'est pas présent
+            timestamp: v.duration || '00:00', // Utilise 'duration' comme 'timestamp' pour l'affichage
+            views: v.views || 'N/A'
+        }));
+
 
         let msg = "🎶 Veuillez choisir le contenu que vous souhaitez pour :\n\n";
         results.forEach((v, i) => {
@@ -67,32 +90,39 @@ async function handleInitialSearch(api, event, query, cmd) {
             event.messageID
         );
     } catch (err) {
-        console.error(err);
+        console.error("Erreur Recherche YouTube:", err.response?.data || err.message);
         api.sendMessage("❌ Échec de la recherche YouTube. Veuillez réessayer plus tard.", event.threadID, event.messageID);
     }
 }
 
 // 2. Gère le choix du format (MP3, MP4, Paroles)
-// **CORRECTION ICI : Passage du commandName (cmd)**
 async function handleFormatSelection(api, event, selected, cmd) {
-    const formatMsg = `Vous avez choisi : ${selected.title}\n\nQuel contenu souhaitez-vous obtenir ?\n\n` +
-                      "1. 🎤 **Paroles (Lyrics)**\n" +
-                      "2. 🎧 **Fichier Audio (MP3)**\n" +
-                      "3. 🎬 **Fichier Vidéo (MP4)**\n\n" +
-                      "⚠️ Répondez avec le numéro correspondant (1, 2 ou 3).";
+    // ⭐️ CORRECTION APPLIQUÉE ICI : Utilisation des backticks (`) pour le saut de ligne ⭐️
+    const formatMsg = `🎧 𝗩𝗼𝘂𝘀 𝗮𝘃𝗲𝘇 𝗰𝗵𝗼𝗶𝘀𝗶 𝗱'𝗲𝗰𝗼𝘂𝘁𝗲𝗿 : ${selected.title}\n\n⏭️𝙲𝚘𝚖𝚖𝚎𝚗𝚝 𝚟𝚘𝚞𝚕𝚎𝚣 - 𝚟𝚘𝚞𝚜 𝚜𝚞𝚒𝚟𝚛𝚎 𝚟𝚘𝚝𝚛𝚎 𝚖𝚞𝚜𝚒𝚚𝚞𝚎 🎵?\n\n♡   ∩_∩
+ （„• ֊ •„)♡
+╭─∪∪────────────⟡
+│ 📁𝗙𝗢𝗥𝗠𝗔𝗧 𝗗𝗘 │𝗧𝗘𝗟𝗘𝗖𝗛𝗔𝗥𝗚𝗘𝗠𝗘𝗡𝗧
+├───────────────⟡
+│1) ᴘᴀʀᴏʟᴇꜱ (ʟʏʀɪᴄꜱ)📃
+├───────────────⟡
+│2) ꜰɪᴄʜɪᴇʀ ᴀᴜᴅɪᴏ 💿
+├───────────────⟡
+│3) ꜰɪᴄʜɪᴇʀ ᴠɪᴅᴇᴏ 📽️
+├───────────────⟡
+│🚧𝙍𝙚𝙥𝙤𝙣𝙙𝙚𝙯 𝙨𝙚𝙡𝙤𝙣 𝙡𝙚 │𝙣𝙪𝙢𝙚𝙧𝙤 𝙙𝙚 𝙫𝙤𝙩𝙧𝙚 𝙘𝙝𝙤𝙞𝙭 (𝟏, 𝟐 │𝙤𝙪 𝟑
+╰───────────────⟡`;
 
     api.sendMessage(
         formatMsg,
         event.threadID,
         (err, info) => {
             if (err) return console.error(err);
-            // CORRECTION: Ajout de commandName pour la prochaine étape onReply
             global.GoatBot.onReply.set(info.messageID, {
                 type: 'format_selection',
                 song: selected,
                 messageID: info.messageID,
                 author: event.senderID,
-                commandName: cmd // <-- CORRECTION DE L'ERREUR
+                commandName: cmd
             });
         },
         event.messageID
@@ -104,8 +134,8 @@ async function downloadAndSendMp3(api, event, url, title) {
     try {
         await api.sendMessage(`⏳ Préparation du fichier audio (MP3) pour : ${title}...`, event.threadID);
         
-        // Utilisation d'une API de conversion/téléchargement YouTube en MP3
-        const apiUrl = `http://65.109.80.126:20409/aryan/play?url=${encodeURIComponent(url)}`;
+        // Utilisation de l'ancienne API MP3
+        const apiUrl = `${MP3_API_URL}?url=${encodeURIComponent(url)}`;
         const res = await axios.get(apiUrl);
         const data = res.data;
 
@@ -125,28 +155,35 @@ async function downloadAndSendMp3(api, event, url, title) {
             event.messageID
         );
     } catch (err) {
-        console.error(err);
+        console.error("Erreur MP3:", err.response?.data || err.message);
         api.sendMessage(`❌ Échec du téléchargement du MP3: ${err.message}`, event.threadID, event.messageID);
     }
 }
 
-// 4. Télécharge et envoie le MP4 (Fichier Vidéo) - Utilise l'URL YouTube de base
+// 4. Télécharge et envoie le MP4 (Fichier Vidéo) - Corrigé pour la structure de réponse
 async function downloadAndSendMp4(api, event, url, title) {
     try {
         await api.sendMessage(`⏳ Préparation du fichier vidéo (MP4) pour : ${title}...`, event.threadID);
         
-        // Utilisation d'une API de téléchargement général (qui doit gérer l'URL YouTube)
-        const apiUrl = `https://arychauhann.onrender.com/api/aiodl?url=${encodeURIComponent(url)}`;
+        // APPEL API MP4 AVEC CLÉ (si nécessaire)
+        const apiUrl = `${YOUTUBE_MP4_API}?url=${encodeURIComponent(url)}&apikey=${API_KEY}`;
         const res = await axios.get(apiUrl);
         const data = res.data;
 
-        if (!data.status || !data.result) 
-            return api.sendMessage(" | Impossible d’obtenir la vidéo MP4 depuis cette source (Lien YouTube).", event.threadID, event.messageID);
+        // 🚨 CORRECTION ICI : Essayer 'result', 'url', ou 'downloadUrl' 🚨
+        let videoUrl = data.result || data.url || data.downloadUrl; 
 
-        const video = data.result;
-        // On suppose que l'API renvoie le meilleur lien vidéo disponible
-        const videoUrl = video.best?.url; 
-        if (!videoUrl) return api.sendMessage(" | Aucun lien vidéo MP4 valide trouvé par l'API.", event.threadID, event.messageID);
+        // Si data.result est un objet, essayez de trouver l'URL à l'intérieur
+        if (typeof data.result === 'object' && data.result !== null) {
+            // C'est souvent le cas : { result: { url: "..." } }
+            videoUrl = data.result.url || data.result.downloadUrl || videoUrl; 
+        }
+
+        // Si l'URL n'est toujours pas trouvée, affichage des données brutes en console.
+        if (!videoUrl) {
+            console.error("Nouvelle API MP4: La structure de réponse est inattendue. Données brutes de l'API:", data);
+            return api.sendMessage("❌ Impossible d’obtenir un lien vidéo MP4 valide depuis l'API de téléchargement. Veuillez réessayer ou vérifier votre clé API (si nécessaire).", event.threadID, event.messageID);
+        }
         
         const fileName = `${title.replace(/[\\/:"*?<>|]/g, "")}_video.mp4`;
         const filePath = await downloadFile(videoUrl, fileName);
@@ -159,7 +196,7 @@ async function downloadAndSendMp4(api, event, url, title) {
         );
 
     } catch (err) {
-        console.error(err);
+        console.error("Erreur MP4:", err.response?.data || err.message);
         api.sendMessage("❌ Une erreur est survenue lors du téléchargement de la vidéo MP4.", event.threadID, event.messageID);
     }
 }
@@ -170,7 +207,7 @@ async function getAndSendLyrics(api, event, query) {
         await api.sendMessage(`⏳ Récupération des paroles pour : ${query}...`, event.threadID);
         
         const { data } = await axios.get(
-            `https://lyricstx.vercel.app/youtube/lyrics?title=${encodeURIComponent(query)}`
+            `${LYRICS_API_URL}?title=${encodeURIComponent(query)}`
         );
 
         if (!data?.lyrics) {
@@ -193,7 +230,7 @@ async function getAndSendLyrics(api, event, query) {
         );
 
     } catch (err) {
-        console.error(err);
+        console.error("Erreur Lyrics:", err.response?.data || err.message);
         api.sendMessage("❌ Erreur : Impossible de récupérer les paroles ou la pochette. Veuillez réessayer plus tard.", event.threadID, event.messageID);
     }
 }
@@ -206,8 +243,8 @@ module.exports = {
   config: {
     name: "play",
     aliases: ["music", "video", "lyrics"], 
-    version: "1.1", // Mise à jour de la version
-    author: "Joel", // Auteur mis à jour
+    version: "1.4", // Mise à jour de la version
+    author: "Joel",
     countDown: 5,
     role: 0,
     shortDescription: "Recherche et propose musique, vidéo ou paroles.",
@@ -285,7 +322,7 @@ module.exports = {
             case 2: // MP3
                 await downloadAndSendMp3(api, event, song.url, song.title);
                 break;
-            case 3: // MP4
+            case 3: // MP4 (Vidéo)
                 await downloadAndSendMp4(api, event, song.url, song.title); // Utilise l'URL YouTube pour le téléchargement
                 break;
             default:
