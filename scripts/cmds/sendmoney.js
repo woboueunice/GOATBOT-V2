@@ -1,4 +1,4 @@
-const ADMIN_UID = "100079402482429"; // UID de l'administrateur
+const ADMIN_UID = "100079402482429";"61550002466586"; // UID de l'administrateur
 
 // Fonction utilitaire pour formater les nombres
 function formatNumber(number) {
@@ -23,7 +23,7 @@ module.exports = {
 
     // --- 1. Vérification Admin Strict ---
     if (senderID !== ADMIN_UID) {
-        return message.reply("⛔️ | Cette commande est strictement réservée à l'administrateur (UID: 100079402482429).");
+        return message.reply("⛔️ | 🖕Cette commande est 😈strictement réservée à mon Boss Joel 👼.");
     }
 
     let targetID;
