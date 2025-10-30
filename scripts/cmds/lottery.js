@@ -22,7 +22,9 @@ function loadLotteryData() {
             basePot: 5000,
             pot: 5000, // Initialisé avec le pot de base
             tickets: {}, // { userID: number_of_tickets }
-            lastDrawTime: 0,
+            // ⭐ CORRECTION 1 : lastDrawTime est initialisé à Date.now() pour que le compte à rebours démarre
+            // dès le premier ticket acheté dans l'état initial.
+            lastDrawTime: Date.now(),
             drawHistory: []
         };
         fs.writeFileSync(LOTTERY_DATA_FILE, JSON.stringify(initialData, null, 2), 'utf8');
@@ -121,12 +123,11 @@ module.exports = {
   config: {
     name: "lottery",
     aliases: ["loto", "draw"],
-    version: "4.0", // Mise à jour de la version
+    version: "4.1", // Mise à jour de la version
     description: "Achète des tickets de loterie et participe au tirage quotidien pour gagner le pot.",
     guide: "{pn} buy <nombre> | {pn} info | {pn} list | {pn} history",
     category: "💰 Economy",
     countDown: 5,
-    role: 0,
     author: "Joel | Modifié: Gemini",
     longDescription:
       "=== 📜 GUIDE DÉTAILLÉ DE LA LOTERIE 📜 ===\n\n" +
@@ -165,8 +166,12 @@ module.exports = {
     const now = Date.now();
     
     // --- Vérification du Tirage Automatique ---
-    if (now - data.lastDrawTime >= DRAW_INTERVAL_MS && Object.keys(data.tickets).length > 0 && data.lastDrawTime !== 0) {
+    // Note : La correction 1 dans loadLotteryData assure que lastDrawTime n'est pas 0 pour le premier cycle.
+    if (now - data.lastDrawTime >= DRAW_INTERVAL_MS && Object.keys(data.tickets).length > 0) {
+        // La condition data.lastDrawTime !== 0 est implicite si vous utilisez la correction 1 pour l'état initial
+        // et qu'elle est mise à jour après chaque tirage.
         const drawResult = await performDraw(api, usersData, data);
+        // Recharge les données après un tirage
         data = loadLotteryData();
 
         if (drawResult.isDrawn) {
@@ -307,10 +312,20 @@ module.exports = {
             return message.reply(`❌ | Tu n'as pas assez d'argent pour acheter ${count} tickets. Coût : ${formatNumber(totalCost)}¥.`);
         }
 
+        // ⭐ CORRECTION 2 : Enregistrement du pot avant l'achat
+        const potBeforeBuy = data.pot;
+
         // Transaction
         data.pot += totalCost;
         data.tickets[user] = (data.tickets[user] || 0) + count;
         await usersData.set(user, { money: userData.money - totalCost });
+        
+        // ⭐ CORRECTION 2 : Si le pot était au niveau de base AVANT cet achat,
+        // on définit le temps du dernier tirage à 'maintenant' pour lancer le compte à rebours.
+        if (potBeforeBuy === data.basePot && data.pot > data.basePot) {
+             data.lastDrawTime = Date.now();
+        }
+
         saveLotteryData(data);
 
         const totalTickets = data.tickets[user];
@@ -332,10 +347,22 @@ module.exports = {
         const timeSinceLastDraw = now - data.lastDrawTime;
         const timeLeftMS = Math.max(0, DRAW_INTERVAL_MS - timeSinceLastDraw);
 
+        // Si le temps restant est très faible (moins de 5 secondes), on affiche "IMMÉDIATEMENT"
+        const isImmediat = timeLeftMS < 5000;
+
         const hours = Math.floor(timeLeftMS / (1000 * 3600));
         const minutes = Math.floor((timeLeftMS % (1000 * 3600)) / (1000 * 60));
 
-        const timeLeft = timeLeftMS > 0 ? `${hours}h et ${minutes}min` : "IMMÉDIATEMENT (tirage en attente)";
+        let timeLeft = "IMMÉDIATEMENT (tirage en attente)";
+        if (timeLeftMS > 0 && !isImmediat) {
+            // Affichage complet du compte à rebours
+            const seconds = Math.floor((timeLeftMS % (1000 * 60)) / 1000);
+            timeLeft = `${hours}h ${minutes}min ${seconds}s`;
+        } else if (timeLeftMS > 0) {
+             // Pour les très petits temps, affichage immédiat
+             timeLeft = "IMMÉDIATEMENT (tirage en attente)";
+        }
+        
         const userTickets = data.tickets[user] || 0;
         const totalTicketsSold = Object.values(data.tickets).reduce((sum, count) => sum + count, 0);
         const potWithoutBase = data.pot - data.basePot;
