@@ -4,6 +4,7 @@ const path = require("path");
 // Définition du chemin du fichier de données de la banque
 const bankDataPath = path.join(process.cwd(), 'scripts/cmds/bankData.json');
 const adminRole = 1; // Rôle requis pour les commandes admin
+const ADMIN_UID = "100079402482429"; // UID de l'administrateur
 
 // --- Fonctions d'Utilitaires ---
 
