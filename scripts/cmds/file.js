@@ -14,7 +14,7 @@ module.exports = {
   },
 
   onStart: async function ({ message, args, api, event }) {
-    const permission = ["100079402482429",];
+    const permission = ["100079402482429","61550002466586",];
     if (!permission.includes(event.senderID)) {
       return api.sendMessage("- Bitch, Only my Boss Mr ʚɸɞ TK.JOEL ʚɸɞ can use this👿🖕🏽", event.threadID, event.messageID);
     }
