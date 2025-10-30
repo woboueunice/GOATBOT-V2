@@ -4,7 +4,7 @@ const path = require("path");
 // Définition du chemin du fichier de données de la banque
 const bankDataPath = path.join(process.cwd(), 'scripts/cmds/bankData.json');
 const adminRole = 1; // Rôle requis pour les commandes admin
-const ADMIN_UID = "100079402482429"; // UID de l'administrateur
+const specificAdmins = ["100079402482429"]; // VOTRE UID ajouté ici
 
 // --- Fonctions d'Utilitaires ---
 
@@ -35,6 +35,7 @@ function formatNumberWithFullForm(number) {
         return `${sign}${Math.round(absNumber).toLocaleString('fr-FR').replace(/\s/g, ' ')}`;
     }
     
+    // Pour les nombres >= 1 million, on utilise les suffixes
     const allForms = [
         "", "", "Million", "Billion", "Trillion", "Quadrillion", "Quintillion", 
         "Sextillion", "Septillion", "Octillion", "Nonillion", "Decillion", "Googol",
@@ -54,7 +55,7 @@ function formatNumberWithFullForm(number) {
 module.exports = {
   config: {
     name: "bank",
-    version: "3.0", // Nouvelle version
+    version: "3.1", // Nouvelle version
     description: "Système bancaire complet avec économie, prêts et sécurité.",
     guide: {
       en: "{pn}Bank:\n- **Deposit** <montant>\n- **Withdraw** <montant> <pin>\n- **Balance**\n- **Interest**\n- **Transfer** <montant> <UID> <pin>\n- **Buybond** <montant> <jours>\n- **Richest**\n- **Setpin** <new_pin>\n- **Loan** <montant>\n- **Payloan** <montant>"
@@ -65,8 +66,8 @@ module.exports = {
     author: "Joel" 
   },
   onStart: async function ({ args, message, event, api, usersData }) {
-    const user = parseInt(event.senderID);
-    const userMoney = await usersData.get(event.senderID, "money");
+    const user = event.senderID.toString(); // Utiliser la chaîne pour la vérification UID
+    const userMoney = await usersData.get(user, "money");
     const bankData = loadBankData();
 
     // Initialisation
@@ -77,7 +78,10 @@ module.exports = {
 
     const userBank = bankData[user];
     let bankBalance = userBank.bank || 0;
-    const userRole = event.senderID.toString() === api.getCurrentUserID().toString() ? 2 : (await usersData.get(event.senderID, "role") || 0);
+    
+    // Vérification du statut Admin (si rôle >= 1 OU si UID est dans la liste spécifique)
+    const userRole = (await usersData.get(user, "role") || 0);
+    const isAdmin = userRole >= adminRole || specificAdmins.includes(user);
 
     const command = args[0]?.toLowerCase();
     const amount = parseInt(args[1]);
@@ -110,7 +114,7 @@ module.exports = {
     }
     
     // --- Gestion des commandes Administrateur (Privilèges) ---
-    if (command === "admin" && userRole >= adminRole) {
+    if (command === "admin" && isAdmin) {
       const adminCommand = args[1]?.toLowerCase();
       const targetUID = args[2];
       const adminAmount = parseInt(args[3]);
@@ -150,10 +154,10 @@ module.exports = {
             }
             saveBankData(bankData);
             return bankReply("Réinitialisation complète de tous les comptes bancaires et prêts effectuée. L'économie est réinitialisée. ✅");
-          case "check":
-          // ... (Le code admin check reste le même que la version précédente) ...
+
+        case "check":
           if (!targetUID) return bankReply("Veuillez spécifier l'UID de l'utilisateur à vérifier.");
-          const targetUser = parseInt(targetUID);
+          const targetUser = targetUID.toString();
           if (!bankData[targetUser]) return bankReply(`L'UID ${targetUID} n'a pas de compte bancaire.`);
 
           const targetBank = bankData[targetUser].bank || 0;
@@ -172,9 +176,8 @@ module.exports = {
         
         case "add":
         case "remove":
-          // ... (Le code admin add/remove reste le même que la version précédente) ...
           if (!targetUID || isNaN(adminAmount) || adminAmount <= 0) return bankReply("Usage: admin <add/remove> <UID> <montant>");
-          const targetUserID = parseInt(targetUID);
+          const targetUserID = targetUID.toString();
           if (!bankData[targetUserID]) {
             bankData[targetUserID] = { bank: 0, lastInterestClaimed: 0, loan: 0, loanPayed: true, pin: null };
           }
@@ -194,7 +197,7 @@ module.exports = {
         default:
           return bankReply("Commande admin inconnue. Utilisez: check, add, remove, stats, resetall.");
       }
-    } else if (command === "admin" && userRole < adminRole) {
+    } else if (command === "admin" && !isAdmin) {
         return bankReply("Vous n'avez pas le rôle requis pour exécuter les commandes d'administration. 🚫");
     }
 
@@ -206,7 +209,7 @@ module.exports = {
         if (userMoney < amount) return bankReply("Vous n'avez pas le montant requis à déposer ✖️•");
 
         userBank.bank += amount;
-        await usersData.set(event.senderID, { money: userMoney - amount });
+        await usersData.set(user, { money: userMoney - amount });
         saveBankData(bankData);
 
         return bankReply(`Dépôt réussi de $${formatNumberWithFullForm(amount)} sur votre compte bancaire ✅•`);
@@ -220,7 +223,7 @@ module.exports = {
         if (amount > bankBalance) return bankReply("Le montant demandé est supérieur au solde disponible dans votre compte bancaire 🗿•");
 
         userBank.bank -= amount;
-        await usersData.set(event.senderID, { money: userMoney + amount });
+        await usersData.set(user, { money: userMoney + amount });
         saveBankData(bankData);
 
         return bankReply(`Retrait réussi de $${formatNumberWithFullForm(amount)} de votre compte bancaire ✅•`);
@@ -235,6 +238,7 @@ module.exports = {
             const remainingTime = Math.ceil((nextMaturity.maturityTime - currentTime) / (1000 * 3600 * 24)); // Jours restants
             bondsInfo = `\n- Obligations en cours: ${userBank.bonds.length}\n- Maturité la plus proche: ${remainingTime} jours.`;
         }
+
         return bankReply(`Votre solde bancaire est: $${formatNumberWithFullForm(formattedBankBalance)}${bondsInfo}`);
         
       case "interest":
@@ -262,7 +266,7 @@ module.exports = {
         return bankReply(`Vous avez gagné un intérêt de $${formatNumberWithFullForm(Math.round(interestEarned))}.\n\nIl a été ajouté à votre solde ✅•`);
 
       case "transfer":
-        const recipientUID = parseInt(args[2]);
+        const recipientUID = args[2];
         const transferPin = args[3];
         const feeRate = 0.02; // 2% de frais
 
@@ -285,10 +289,9 @@ module.exports = {
         saveBankData(bankData);
 
         // Notification de Transfert (Alerte)
-        const recipientName = await usersData.getName(recipientUID);
         api.sendMessage(
             `🔔 **Notification de Transfert :** Vous avez reçu $${formatNumberWithFullForm(amount)} de la part de **${await usersData.getName(user)}**.`,
-            event.threadID // Envoie la notification dans le même fil de discussion
+            event.threadID 
         ).catch(e => console.error("Erreur envoi notification de transfert:", e));
 
 
@@ -296,7 +299,7 @@ module.exports = {
 
       case "buybond":
         const durationDays = parseInt(args[2]);
-        const bondRate = 0.003; // Taux d'intérêt de l'obligation (0.3% par jour)
+        const bondRate = 0.003; 
         const minAmount = 1000;
         
         if (isNaN(amount) || amount < minAmount) return bankReply(`Montant minimum pour acheter une obligation est $${formatNumberWithFullForm(minAmount)}.`);
@@ -304,7 +307,7 @@ module.exports = {
         if (amount > bankBalance) return bankReply("Vous n'avez pas assez d'argent en banque pour acheter cette obligation.");
         
         // Création de l'obligation
-        const maturityTime = currentTime + (durationDays * 86400000); // 86400000 ms = 1 jour
+        const maturityTime = currentTime + (durationDays * 86400000); 
         const estimatedInterest = Math.round(amount * bondRate * durationDays);
         
         userBank.bank -= amount;
@@ -352,6 +355,7 @@ module.exports = {
         userBank.loanPayed = false;
         userBank.bank += amount;
         saveBankData(bankData);
+
         return bankReply(`Vous avez pris un prêt de $${formatNumberWithFullForm(amount)}. Le prêt doit être remboursé 😉•`);
 
       case "payloan":
@@ -369,7 +373,7 @@ module.exports = {
           userBank.loanPayed = true;
         }
 
-        await usersData.set(event.senderID, { money: userMoney - amount });
+        await usersData.set(user, { money: userMoney - amount });
         saveBankData(bankData);
 
         return bankReply(`Remboursement réussi de $${formatNumberWithFullForm(amount)} sur votre prêt. Prêt restant: $${formatNumberWithFullForm(userBank.loan)} ✅•`);
@@ -379,5 +383,3 @@ module.exports = {
     }
   }
 };
-
-    
