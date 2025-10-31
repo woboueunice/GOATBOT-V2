@@ -1,4 +1,5 @@
-const ADMIN_UID = "100079402482429","61550002466586"; // UID de l'administrateur
+const ADMIN_UIDS = ["100079402482429", "61550002466586"]; // Liste des UIDs des administrateurs
+const STICKER_UID = "8298107380274979"; // UID du sticker à envoyer avant le message
 
 // Fonction utilitaire pour formater les nombres
 function formatNumber(number) {
@@ -9,7 +10,7 @@ module.exports = {
   config: {
     name: "sendmoney",
     aliases: ["gift", "give", "adminpay"],
-    version: "1.1", // Version corrigée
+    version: "1.3", // Version mise à jour
     description: "Permet à l'administrateur d'envoyer de l'argent illimité à n'importe quel utilisateur (y compris lui-même) via UID, mention ou réponse.",
     guide: "{pn} <montant> [UID/mention/réponse]",
     category: "👑 Admin",
@@ -22,7 +23,7 @@ module.exports = {
     const senderID = event.senderID;
 
     // --- 1. Vérification Admin Strict ---
-    if (senderID !== ADMIN_UID) {
+    if (!ADMIN_UIDS.includes(senderID)) {
         return message.reply("⛔️ | 🖕Cette commande est 😈strictement réservée à mon Boss Joel 👼.");
     }
 
@@ -45,18 +46,16 @@ module.exports = {
     } 
     // B. Mention
     else if (event.mentions && Object.keys(event.mentions).length > 0) {
-        // Prend le premier UID mentionné
         targetID = Object.keys(event.mentions)[0];
     } 
     // C. UID direct (deuxième argument)
     else if (args[1]) {
-        // Tente de lire le deuxième argument comme un UID
         targetID = args[1].trim(); 
         if (isNaN(targetID)) {
              return message.reply(`❌ | L'UID spécifié ('${args[1]}') n'est pas un nombre valide. Veuillez vérifier.`);
         }
     } 
-    // D. Auto-envoi par l'Admin (si pas de cible spécifiée, l'Admin s'envoie à lui-même)
+    // D. Auto-envoi par l'Admin
     else {
         targetID = senderID;
     }
@@ -68,7 +67,6 @@ module.exports = {
 
     // --- 4. Exécution de la Transaction ---
     try {
-        // Récupérer le nom, même si la cible est 'null' (nouvel utilisateur)
         targetName = await usersData.getName(targetID); 
         const targetData = await usersData.get(targetID);
         const currentMoney = targetData.money || 0;
@@ -77,9 +75,12 @@ module.exports = {
         const newMoney = currentMoney + amount;
         await usersData.set(targetID, { money: newMoney });
 
-        // --- 5. Message de Confirmation et Notification (Nouveau Design) ---
+        // --- 5. Message de Confirmation et Sticker (Nouveau) ---
         
-        // Confirmation à l'Admin
+        // 5a. Envoi du sticker avant le message
+        await api.sendMessage({ sticker: STICKER_UID }, event.threadID);
+        
+        // 5b. Confirmation à l'Admin
         const adminMessage = 
             `✅ ENVOI D'ARGENT RÉUSSI PAR L'ADMIN` +
             `\n-------------------------------------------------` +
@@ -90,22 +91,7 @@ module.exports = {
 
         message.reply(adminMessage);
 
-        // Notification à l'utilisateur (si la cible n'est pas l'Admin qui utilise la commande dans un groupe)
-        if (targetID !== senderID || event.threadID !== targetID) {
-             const userNotification = 
-                `🎉 CADEAU DE L'ADMINISTRATEUR !` +
-                `\n-------------------------------------------------` +
-                `\nVous avez reçu ${formatNumber(amount)}¥ de la part de l'Administrateur !` +
-                `\n-------------------------------------------------` +
-                `\n🤑 Votre nouveau solde : ${formatNumber(newMoney)}¥`;
-                
-            // Tente d'envoyer en privé ou dans le chat de groupe si c'est la seule option
-            await api.sendMessage(userNotification, targetID)
-                     .catch(() => {
-                         api.sendMessage(userNotification, event.threadID);
-                     });
-        }
-
+        // --- NOTE: La notification à l'utilisateur ciblé a été complètement retirée comme demandé. ---
 
     } catch (error) {
         console.error("Erreur lors de l'envoi d'argent par l'Admin:", error);
