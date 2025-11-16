@@ -1,7 +1,6 @@
 "use strict";
 
-// CHEMIN CORRIGÉ ICI
-const utils = require('../utils');
+const utils = require('../utils'); // Correction du chemin
 // @NethWs3Dev
 
 const allowedProperties = {
@@ -43,16 +42,11 @@ module.exports = (defaultFuncs, api, ctx) => {
     if (!resData || resData.error || !resData.payload){
         throw new Error(resData);
     }
-    // LIGNE "RETURN" AJOUTÉE ICI
-    return resData.payload.share_data.share_params;
+    return resData.payload.share_data.share_params; // Correction : Ajout de return
   }
 
-  async function sendContent(form, threadID, isSingleUser, messageAndOTID, _callback) {
-    // There are three cases here:
-    // 1. threadID is of type array, where we're starting a new group chat with users
-    //    specified in the array.
-    // 2. User is sending a message to a specific user.
-    // 3. No additional form params and the message goes to an existing group chat.
+  async function sendContent(form, threadID, isSingleUser, messageAndOTID) { // Suppression de _callback
+    // ... (Le reste de la fonction sendContent est identique)
     if (utils.getType(threadID) === "Array") {
       for (let i = 0; i < threadID.length; i++) {
         form["specific_to_list[" + i + "]"] = "fbid:" + threadID[i];
@@ -61,8 +55,6 @@ module.exports = (defaultFuncs, api, ctx) => {
       form["client_thread_id"] = "root:" + messageAndOTID;
       utils.log("sendMessage", "Sending message to multiple users: " + threadID);
     } else {
-      // This means that threadID is the id of a user, and the chat
-      // is a single person chat
       if (isSingleUser) {
         form["specific_to_list[0]"] = "fbid:" + threadID;
         form["specific_to_list[1]"] = "fbid:" + ctx.userID;
@@ -100,146 +92,164 @@ module.exports = (defaultFuncs, api, ctx) => {
     return messageInfo;
   }
 
-  return async (msg, threadID, replyToMessage, isSingleUser) => {
-    const msgType = utils.getType(msg);
-    const threadIDType = utils.getType(threadID);
-    const messageIDType = utils.getType(replyToMessage);
-    if (msgType !== "String" && msgType !== "Object") throw new Error("Message should be of type string or object and not " + msgType + ".");
-    if (threadIDType !== "Array" && threadIDType !== "Number" && threadIDType !== "String") throw new Error("ThreadID should be of type number, string, or array and not " + threadIDType + ".");
-    if (replyToMessage && messageIDType !== 'String') throw new Error("MessageID should be of type string and not " + messageIDType + ".");
-    if (msgType === "String") {
-      msg = { body: msg };
+  // NOUVELLE LOGIQUE DE RETOUR (Accepte les callbacks et les promesses)
+  return function (msg, threadID, callbackOrReply, isSingleUserOrReply, isGroup) {
+    let callback = () => {};
+    let replyToMessage;
+    let isSingleUser;
+
+    // Devine les arguments basés sur l'ancien et le nouveau style
+    if (typeof callbackOrReply === 'function') {
+      // Ancien style: (msg, threadID, callback, replyToMessage, isGroup)
+      callback = callbackOrReply;
+      replyToMessage = isSingleUserOrReply;
+      isSingleUser = isGroup === null || isGroup === undefined ? null : !isGroup;
+    } else {
+      // Nouveau style: (msg, threadID, replyToMessage, isSingleUser)
+      replyToMessage = callbackOrReply;
+      isSingleUser = isSingleUserOrReply;
     }
-    
-    // Auto-detect if it's a single user chat when not explicitly specified
-    if (isSingleUser === undefined || isSingleUser === null) {
-      // Check if we have thread type info cached
-      if (!ctx.threadTypeCache) {
-        ctx.threadTypeCache = {};
-      }
-      
-      // If we have cached info, use it
-      if (ctx.threadTypeCache[threadID] !== undefined) {
-        isSingleUser = !ctx.threadTypeCache[threadID]; // true if not a group
-      } else {
-        // Try to get thread info to determine type
-        try {
-          const threadInfo = await api.getThreadInfo(threadID);
-          const isGroup = threadInfo.isGroup || threadInfo.threadType === 2;
-          ctx.threadTypeCache[threadID] = isGroup;
-          isSingleUser = !isGroup;
-        } catch (err) {
-          // If we can't get thread info, default to single user for personal chats
-          // Groups usually have longer numeric IDs
-          const threadIDStr = threadID.toString();
-          isSingleUser = threadIDStr.length < 16;
-          utils.warn("sendMessage", "Could not determine thread type, guessing based on ID length");
+
+    const returnPromise = new Promise((resolve, reject) => {
+      callback = (err, data) => {
+        if (err) return reject(err);
+        resolve(data);
+      };
+    });
+
+    // Logique interne pour exécuter l'envoi
+    const internalSendMessage = async () => {
+      try {
+        const msgType = utils.getType(msg);
+        const threadIDType = utils.getType(threadID);
+        const messageIDType = utils.getType(replyToMessage);
+
+        if (msgType !== "String" && msgType !== "Object") throw new Error("Message should be of type string or object and not " + msgType + ".");
+        if (threadIDType !== "Array" && threadIDType !== "Number" && threadIDType !== "String") throw new Error("ThreadID should be of type number, string, or array and not " + threadIDType + ".");
+        if (replyToMessage && messageIDType !== 'String') throw new Error("MessageID should be of type string and not " + messageIDType + "."); // C'est ici que l'erreur se produisait
+        
+        if (msgType === "String") {
+          msg = { body: msg };
         }
+        
+        if (isSingleUser === undefined || isSingleUser === null) {
+          if (!ctx.threadTypeCache) ctx.threadTypeCache = {};
+          if (ctx.threadTypeCache[threadID] !== undefined) {
+            isSingleUser = !ctx.threadTypeCache[threadID];
+          } else {
+            try {
+              const threadInfo = await api.getThreadInfo(threadID);
+              const isGroup = threadInfo.isGroup || threadInfo.threadType === 2;
+              ctx.threadTypeCache[threadID] = isGroup;
+              isSingleUser = !isGroup;
+            } catch (err) {
+              const threadIDStr = threadID.toString();
+              isSingleUser = threadIDStr.length < 16;
+              utils.warn("sendMessage", "Could not determine thread type, guessing based on ID length");
+            }
+          }
+        }
+
+        const disallowedProperties = Object.keys(msg).filter(prop => !allowedProperties[prop]);
+        if (disallowedProperties.length > 0) throw new Error("Dissallowed props: `" + disallowedProperties.join(", ") + "`");
+
+        const messageAndOTID = utils.generateOfflineThreadingID();
+        const form = {
+          client: "mercury",
+          action_type: "ma-type:user-generated-message",
+          author: "fbid:" + ctx.userID,
+          timestamp: Date.now(),
+          timestamp_absolute: "Today",
+          timestamp_relative: utils.generateTimestampRelative(),
+          timestamp_time_passed: "0",
+          is_unread: false,
+          is_cleared: false,
+          is_forward: false,
+          is_filtered_content: false,
+          is_filtered_content_bh: false,
+          is_filtered_content_account: false,
+          is_filtered_content_invalid_app: false,
+          is_spoof_warning: false,
+          source: "source:chat:web",
+          "source_tags[0]": "source:chat",
+          ...(msg.body && { body: msg.body }),
+          html_body: false,
+          ui_push_phase: "V3",
+          status: "0",
+          offline_threading_id: messageAndOTID,
+          message_id: messageAndOTID,
+          threading_id: utils.generateThreadingID(ctx.clientID),
+          "ephemeral_ttl_mode:": "0",
+          manual_retry_cnt: "0",
+          has_attachment: !!(msg.attachment || msg.url || msg.sticker),
+          signatureID: utils.getSignatureID(),
+          ...(replyToMessage && { replied_to_message_id: replyToMessage })
+        };
+
+        if (msg.location) {
+          if (!msg.location.latitude || !msg.location.longitude) throw new Error("location property needs both latitude and longitude");
+          form["location_attachment[coordinates][latitude]"] = msg.location.latitude;
+          form["location_attachment[coordinates][longitude]"] = msg.location.longitude;
+          form["location_attachment[is_current_location]"] = !!msg.location.current;
+        }
+        if (msg.sticker) {
+          form["sticker_id"] = msg.sticker;
+        }
+        if (msg.attachment) {
+          form.image_ids = [];
+          form.gif_ids = [];
+          form.file_ids = [];
+          form.video_ids = [];
+          form.audio_ids = [];
+          if (utils.getType(msg.attachment) !== "Array") {
+            msg.attachment = [msg.attachment];
+          }
+          const files = await uploadAttachment(msg.attachment);
+          files.forEach(file => {
+              const type = Object.keys(file)[0];
+              form["" + type + "s"].push(file[type]);
+          }); 
+        }
+        if (msg.url) {
+          form["shareable_attachment[share_type]"] = "100";
+          const params = await getUrl(msg.url);
+          form["shareable_attachment[share_params]"] = params;
+        }
+        if (msg.emoji) {
+          if (!msg.emojiSize) msg.emojiSize = "medium";
+          if (msg.emojiSize !== "small" && msg.emojiSize !== "medium" && msg.emojiSize !== "large") {
+            throw new Error("emojiSize property is invalid");
+          }
+          if (form.body) throw new Error("body must be empty when using emoji");
+          form.body = msg.emoji;
+          form["tags[0]"] = "hot_emoji_size:" + msg.emojiSize;
+        } 
+        if (msg.mentions) {
+          for (let i = 0; i < msg.mentions.length; i++) {
+            const mention = msg.mentions[i];
+            const tag = mention.tag;
+            if (typeof tag !== "string") throw new Error("Mention tags must be strings.");
+            const offset = msg.body.indexOf(tag, mention.fromIndex || 0);
+            if (offset < 0) utils.warn("handleMention", 'Mention for "' + tag + '" not found in message string.');
+            if (!mention.id) utils.warn("handleMention", "Mention id should be non-null.");
+            const id = mention.id || 0;
+            const emptyChar = '\u200E';
+            form["body"] = emptyChar + msg.body;
+            form["profile_xmd[" + i + "][offset]"] = offset + 1;
+            form["profile_xmd[" + i + "][length]"] = tag.length;
+            form["profile_xmd[" + i + "][id]"] = id;
+            form["profile_xmd[" + i + "][type]"] = "p";
+          }
+        }
+        
+        const result = await sendContent(form, threadID, isSingleUser, messageAndOTID);
+        callback(null, result);
+      } catch (err) {
+        callback(err);
       }
-    }
-    const disallowedProperties = Object.keys(msg).filter(prop => !allowedProperties[prop]);
-    if (disallowedProperties.length > 0) {
-      throw new Error("Dissallowed props: `" + disallowedProperties.join(", ") + "`");
-    }
-    const messageAndOTID = utils.generateOfflineThreadingID();
-    const form = {
-      client: "mercury",
-      action_type: "ma-type:user-generated-message",
-      author: "fbid:" + ctx.userID,
-      timestamp: Date.now(),
-      timestamp_absolute: "Today",
-      timestamp_relative: utils.generateTimestampRelative(),
-      timestamp_time_passed: "0",
-      is_unread: false,
-      is_cleared: false,
-      is_forward: false,
-      is_filtered_content: false,
-      is_filtered_content_bh: false,
-      is_filtered_content_account: false,
-      is_filtered_content_invalid_app: false,
-      is_spoof_warning: false,
-      source: "source:chat:web",
-      "source_tags[0]": "source:chat",
-      ...(msg.body && {
-          body: msg.body
-      }),
-      html_body: false,
-      ui_push_phase: "V3",
-      status: "0",
-      offline_threading_id: messageAndOTID,
-      message_id: messageAndOTID,
-      threading_id: utils.generateThreadingID(ctx.clientID),
-      "ephemeral_ttl_mode:": "0",
-      manual_retry_cnt: "0",
-      has_attachment: !!(msg.attachment || msg.url || msg.sticker),
-      signatureID: utils.getSignatureID(),
-      ...(replyToMessage && {
-          replied_to_message_id: replyToMessage
-      })
     };
 
-    if (msg.location) {
-      if (!msg.location.latitude || !msg.location.longitude) throw new Error("location property needs both latitude and longitude");
-      form["location_attachment[coordinates][latitude]"] = msg.location.latitude;
-      form["location_attachment[coordinates][longitude]"] = msg.location.longitude;
-      form["location_attachment[is_current_location]"] = !!msg.location.current;
-    }
-    if (msg.sticker) {
-      form["sticker_id"] = msg.sticker;
-    }
-    if (msg.attachment) {
-      form.image_ids = [];
-      form.gif_ids = [];
-      form.file_ids = [];
-      form.video_ids = [];
-      form.audio_ids = [];
-      if (utils.getType(msg.attachment) !== "Array") {
-        msg.attachment = [msg.attachment];
-      }
-      const files = await uploadAttachment(msg.attachment);
-      files.forEach(file => {
-          const type = Object.keys(file)[0];
-          form["" + type + "s"].push(file[type]);
-      }); 
-    }
-    if (msg.url) {
-      form["shareable_attachment[share_type]"] = "100";
-      const params = await getUrl(msg.url);
-      form["shareable_attachment[share_params]"] = params;
-    }
-    if (msg.emoji) {
-      if (!msg.emojiSize) {
-        msg.emojiSize = "medium";
-      }
-      if (msg.emojiSize !== "small" && msg.emojiSize !== "medium" && msg.emojiSize !== "large") {
-        throw new Error("emojiSize property is invalid");
-      }
-      if (form.body) {
-        throw new Error("body must be empty when using emoji");
-      }
-      form.body = msg.emoji;
-      form["tags[0]"] = "hot_emoji_size:" + msg.emojiSize;
-    } 
-    if (msg.mentions) {
-      for (let i = 0; i < msg.mentions.length; i++) {
-        const mention = msg.mentions[i];
-        const tag = mention.tag;
-        if (typeof tag !== "string") {
-          throw new Error("Mention tags must be strings.");
-        }
-        const offset = msg.body.indexOf(tag, mention.fromIndex || 0);
-        if (offset < 0) utils.warn("handleMention", 'Mention for "' + tag + '" not found in message string.');
-        if (!mention.id) utils.warn("handleMention", "Mention id should be non-null.");
-        const id = mention.id || 0;
-        const emptyChar = '\u200E';
-        form["body"] = emptyChar + msg.body;
-        form["profile_xmd[" + i + "][offset]"] = offset + 1;
-        form["profile_xmd[" + i + "][length]"] = tag.length;
-        form["profile_xmd[" + i + "][id]"] = id;
-        form["profile_xmd[" + i + "][type]"] = "p";
-      }
-    }
-    const result = await sendContent(form, threadID, isSingleUser, messageAndOTID);
-    return result;
+    internalSendMessage();
+    return returnPromise;
   };
 };
