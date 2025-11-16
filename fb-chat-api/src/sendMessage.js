@@ -1,4 +1,7 @@
-const utils = require('../../../utils');
+"use strict";
+
+// CHEMIN CORRIGÉ ICI
+const utils = require('../utils');
 // @NethWs3Dev
 
 const allowedProperties = {
@@ -40,6 +43,8 @@ module.exports = (defaultFuncs, api, ctx) => {
     if (!resData || resData.error || !resData.payload){
         throw new Error(resData);
     }
+    // LIGNE "RETURN" AJOUTÉE ICI
+    return resData.payload.share_data.share_params;
   }
 
   async function sendContent(form, threadID, isSingleUser, messageAndOTID, _callback) {
@@ -151,7 +156,6 @@ module.exports = (defaultFuncs, api, ctx) => {
       is_filtered_content: false,
       is_filtered_content_bh: false,
       is_filtered_content_account: false,
-      is_filtered_content_quasar: false,
       is_filtered_content_invalid_app: false,
       is_spoof_warning: false,
       source: "source:chat:web",
