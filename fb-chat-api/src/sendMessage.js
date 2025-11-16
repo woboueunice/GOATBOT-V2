@@ -1,6 +1,6 @@
 "use strict";
 
-const utils = require('../utils'); // Correction du chemin
+const utils = require('../utils'); // Chemin corrigé
 // @NethWs3Dev
 
 const allowedProperties = {
@@ -46,7 +46,6 @@ module.exports = (defaultFuncs, api, ctx) => {
   }
 
   async function sendContent(form, threadID, isSingleUser, messageAndOTID) { // Suppression de _callback
-    // ... (Le reste de la fonction sendContent est identique)
     if (utils.getType(threadID) === "Array") {
       for (let i = 0; i < threadID.length; i++) {
         form["specific_to_list[" + i + "]"] = "fbid:" + threadID[i];
@@ -111,6 +110,7 @@ module.exports = (defaultFuncs, api, ctx) => {
     }
 
     const returnPromise = new Promise((resolve, reject) => {
+      // On redéfinit le callback pour qu'il fonctionne avec les promesses
       callback = (err, data) => {
         if (err) return reject(err);
         resolve(data);
@@ -126,7 +126,14 @@ module.exports = (defaultFuncs, api, ctx) => {
 
         if (msgType !== "String" && msgType !== "Object") throw new Error("Message should be of type string or object and not " + msgType + ".");
         if (threadIDType !== "Array" && threadIDType !== "Number" && threadIDType !== "String") throw new Error("ThreadID should be of type number, string, or array and not " + threadIDType + ".");
-        if (replyToMessage && messageIDType !== 'String') throw new Error("MessageID should be of type string and not " + messageIDType + "."); // C'est ici que l'erreur se produisait
+        
+        // C'est cette ligne qui causait l'erreur.
+        // On vérifie si `replyToMessage` (qui pouvait être un callback) est bien une string
+        if (replyToMessage && messageIDType !== 'String') {
+          // Si ce n'est pas une string, c'est que l'ancien style a été utilisé sans messageID de réponse.
+          // On le met à undefined.
+          replyToMessage = undefined;
+        }
         
         if (msgType === "String") {
           msg = { body: msg };
