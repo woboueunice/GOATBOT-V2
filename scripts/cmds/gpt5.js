@@ -1,64 +1,211 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
-// --- Configuration API GPT5  ---
-const AI_API_URL = 'https://apis.davidcyriltech.my.id/ai/metaai';
-// 🚨 TRÈS IMPORTANT : Remplacez par votre clé API réelle si vous en avez une.
-const API_KEY = ''; // <-- LAISSER VIDE OU ENTRER UNE CLÉ SI NÉCESSAIRE.
+// --- Configuration API Gemini ---
+// Modèle pour le TExte, la Recherche, et la VISION
+const GEMINI_FLASH_MODEL = 'gemini-2.5-flash-preview-09-2025';
+// Modèle pour la GÉNÉRATION d'image (Nano-Banana).
+// NOTE: Ce modèle a une limite de 1-2 images par minute. Un cooldown est implémenté.
+const GEMINI_IMAGE_GEN_MODEL = 'gemini-2.5-flash-image-preview';
 
-// Objet pour stocker l'historique de la conversation (mémoire)
+// 🚨 VOTRE CLÉ API GEMINI 🚨
+const API_KEY = "AIzaSyAbnxZuCt5Lv3VC4x3sU0PZGphN05alRNs"; // 👈 Votre clé est ici.
+
+// Assurer que le dossier temporaire existe
+const tmpPath = path.join(__dirname, 'tmp');
+if (!fs.existsSync(tmpPath)) {
+    fs.mkdirSync(tmpPath, { recursive: true });
+}
+
+// Objets de gestion
 const conversationHistory = {};
+const botMessageIDs = new Set();
+// NOUVEAU: Cooldown (temps de recharge) pour la génération d'image (en millisecondes)
+const IMAGE_GEN_COOLDOWN_MS = 60000; // 60 secondes
+const imageGenCooldown = new Map();
 
-// Liste des MessageIDs du bot qui sont des débuts de conversation.
-const botMessageIDs = new Set(); 
-
-// Préfixes d'activation de la commande
-const Prefixes = [
-  'gpt5',
-  'chatgpt',
-  '.gpt5',
-  'g5',
-];
-
-// Préfixes spécifiques pour l'horloge
-const TimePrefixes = [
-  '/time',
-  '/heure',
-];
+// --- Préfixes ---
+const Prefixes = ['gpt5', 'chatgpt', '.gpt5', 'g5'];
+const TimePrefixes = ['/time', '/heure'];
+const ImageGenPrefixes = ['/imagine', '/dessine', '/gen'];
 
 // =========================================================
-// 1. FONCTIONS UTILITAIRES (Inchangées, mais utilisent la nouvelle API)
+// 1. FONCTIONS UTILITAIRES
 // =========================================================
 
-/*
-  Fonction pour obtenir l'heure et la date pour un lieu donné.
+/**
+ * Construit l'URL de l'API Gemini
+ */
+function getGeminiApiUrl(modelName) {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`;
+}
+
+/**
+ * Télécharge une pièce jointe (pour la vision)
+ */
+async function downloadAttachment(url) {
+    try {
+        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+        const mimeType = response.headers['content-type'];
+        return { base64Data, mimeType };
+    } catch (error) {
+        console.error("Erreur téléchargement pièce jointe:", error.message);
+        return null;
+    }
+}
+
+/**
+ * Gère la génération d'image (Modèle 'nano-banana')
+ */
+async function handleImageGeneration(api, event, prompt) {
+    const threadID = event.threadID;
+    const userMessageID = event.messageID;
+    let waitingMessageID = null;
+
+    try {
+        // Message d'attente pour la génération
+        api.sendMessage("🎨 Je commence à dessiner votre image (Modèle Flash-Image)... Veuillez patienter.", threadID, (err, info) => {
+            if (!err) waitingMessageID = info.messageID;
+        });
+
+        const apiUrl = getGeminiApiUrl(GEMINI_IMAGE_GEN_MODEL);
+        
+        const payload = {
+            contents: [{
+                parts: [{ text: prompt }]
+            }],
+            generationConfig: {
+                responseModalities: ['TEXT', 'IMAGE'] 
+            },
+        };
+
+        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        
+        if (waitingMessageID) api.unsendMessage(waitingMessageID);
+
+        const base64Data = response.data?.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+
+        if (!base64Data) {
+            api.sendMessage("Désolé, je n'ai pas pu générer l'image. L'IA a peut-être refusé pour des raisons de sécurité (filtre).", threadID);
+            return;
+        }
+
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        const imagePath = path.join(tmpPath, `${event.messageID}.png`);
+        fs.writeFileSync(imagePath, imageBuffer);
+
+        api.sendMessage({
+            body: `Voici votre image pour : "${prompt}"`,
+            attachment: fs.createReadStream(imagePath)
+        }, threadID, (err, msgInfo) => {
+            if (fs.existsSync(imagePath)) {
+                fs.unlinkSync(imagePath);
+            }
+        });
+
+    } catch (error) {
+        console.error("Erreur handleImageGeneration:", error.message);
+        if (waitingMessageID) api.unsendMessage(waitingMessageID);
+
+        let httpStatus = error.response?.status;
+        let errorMsg = `❌ Une erreur est survenue lors de la génération de l'image. (HTTP: ${httpStatus})`;
+        
+        if (httpStatus === 429) {
+            errorMsg += "\n\n💡 **Limite Atteinte (429)**: Vous avez fait trop de demandes trop rapidement. **Veuillez patienter 1 minute**.";
+        } else if (httpStatus === 400) {
+             errorMsg += "\n\n💡 **Erreur (400)**: Votre prompt a été refusé par les filtres de sécurité de Google.";
+        }
+        
+        api.sendMessage(errorMsg, threadID);
+    }
+}
+
+/**
+ * Analyse l'intention de l'utilisateur (Chat vs Image)
+ */
+async function analyzeUserIntent(userPrompt, chatHistory) {
+    try {
+        const apiUrl = getGeminiApiUrl(GEMINI_FLASH_MODEL); 
+        
+        const history = (chatHistory || []).slice(-4).map(h => ([
+            { role: "user", parts: h.userParts },
+            { role: "model", parts: [{ text: h.aiResponse }] }
+        ])).flat();
+
+        const systemPrompt = `Tu es un analyseur d'intention. L'utilisateur va te donner un prompt. Tu dois déterminer s'il veut "chatter" ou "générer une image".
+Réponds UNIQUEMENT en JSON.
+Si l'utilisateur demande de dessiner, créer, imaginer, ou générer une image, fixe "intent" à "image".
+Pour tout le reste (questions, salutations, etc.), fixe "intent" à "chat".
+Extrait le prompt de génération si nécessaire. Si c'est un chat, le prompt est le texte de l'utilisateur.
+
+Exemples:
+- "créé une image d'un chat" -> {"intent": "image", "prompt": "un chat"}
+- "dessine un dragon" -> {"intent": "image", "prompt": "un dragon"}
+- "salut ça va?" -> {"intent": "chat", "prompt": "salut ça va?"}
+- "c'est quoi la capitale du Cameroun?" -> {"intent": "chat", "prompt": "c'est quoi la capitale du Cameroun?"}`;
+
+        const payload = {
+            contents: [ ...history, { role: "user", parts: [{ text: userPrompt }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        "intent": { "type": "STRING", "enum": ["chat", "image"] },
+                        "prompt": { "type": "STRING" }
+                    },
+                    required: ["intent", "prompt"]
+                }
+            }
+        };
+
+        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        const jsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (jsonText) {
+            return JSON.parse(jsonText);
+        }
+        return { intent: "chat", prompt: userPrompt }; // Fallback
+
+    } catch (error) {
+        console.error("Erreur analyzeUserIntent:", error.message);
+        return { intent: "chat", prompt: userPrompt };
+    }
+}
+
+
+/**
+ * Gère la récupération de l'heure
  */
 async function getDateTimeForLocation(location) {
     try {
-        // Construction de l'URL pour la recherche factuelle (Heure)
-        const params = {
-            text: `Quelle est l'heure et la date actuelles précises dans la ville de ${location}? Réponds uniquement avec l'heure et la date, sans autres phrases.`,
-            apikey: API_KEY // Inclus la clé
+        const apiUrl = getGeminiApiUrl(GEMINI_FLASH_MODEL);
+        const userPrompt = `Quelle est l'heure et la date actuelles précises dans la ville de ${location}? Réponds uniquement avec l'heure et la date, sans autres phrases.`;
+        const payload = {
+            contents: [{ parts: [{ text: userPrompt }] }],
+            tools: [{ "google_search": {} }]
         };
-
-        const response = await axios.get(AI_API_URL, { params });
-
-        let result = response.data.response || response.data.result || response.data.message || response.data.text; 
+        const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        let result = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         
         if (typeof result === 'string' && result.trim()) {
              result = result.replace(/l'heure|actuelle|est|dans|la|ville|de|à|maintenant|il est|le/gi, '').trim();
              return `L'heure et la date actuelles à ${location} sont : ${result}.`;
         }
-        
         const now = new Date();
         return `Je n'ai pas pu obtenir l'heure précise pour ${location}. Voici mon heure locale : ${now.toLocaleTimeString('fr-FR', { timeZoneName: 'long' })}.`;
-
     } catch (error) {
-        console.error("Erreur lors de la récupération de l'heure/date (GPT5):", error.message);
+        console.error("Erreur getDateTimeForLocation:", error.message);
         return `Désolé, une erreur est survenue lors de la tentative de récupération de l'heure pour ${location}.`;
     }
 }
 
-// Fonction utilitaire pour récupérer le nom d'utilisateur
+/**
+ * Gère le nom d'utilisateur
+ */
 async function getUserName(api, senderID) {
     try {
         const userInfo = await api.getUserInfo(senderID);
@@ -71,6 +218,32 @@ async function getUserName(api, senderID) {
     }
 }
 
+/**
+ * NOUVEAU: Vérifie le cooldown de l'utilisateur
+ */
+function checkCooldown(senderID) {
+    const now = Date.now();
+    if (imageGenCooldown.has(senderID)) {
+        const lastGenTime = imageGenCooldown.get(senderID);
+        const timeElapsed = now - lastGenTime;
+        if (timeElapsed < IMAGE_GEN_COOLDOWN_MS) {
+            const timeLeft = Math.ceil((IMAGE_GEN_COOLDOWN_MS - timeElapsed) / 1000);
+            return timeLeft; // Retourne le temps restant
+        }
+    }
+    return 0; // Pas de cooldown
+}
+
+/**
+ * NOUVEAU: Active le cooldown de l'utilisateur
+ */
+function setCooldown(senderID) {
+    imageGenCooldown.set(senderID, Date.now());
+    setTimeout(() => {
+        imageGenCooldown.delete(senderID);
+    }, IMAGE_GEN_COOLDOWN_MS);
+}
+
 // =========================================================
 // 2. CONFIGURATION ET ONCHAT (Logique principale)
 // =========================================================
@@ -78,216 +251,238 @@ async function getUserName(api, senderID) {
 module.exports = {
   config: {
     name: "gpt5",
-    aliases: ['chatgpt'], // Correction: ajout des crochets car aliases est généralement un tableau
-    version: 1.1, // Version mise à jour
-    author: "Tk Joel",
-    longDescription: "GPT-5, avec mémoire de conversation, personnalité, conversation par réponse, heure mondiale et recherche (2025).",
+    aliases: ['chatgpt'],
+    version: 4.1, // Version 4.1 (Cooldown Fix + UI Tweaks)
+    author: "Tk Joel (Adapté par Gemini)",
+    longDescription: "GPT-5 (Gemini Flash) avec Vision, Génération d'image (Intelligente), Mémoire, Heure mondiale et Recherche.",
     category: "ai",
     guide: {
-      en: "{p} questions ou répondez à un message du bot pour continuer la conversation. Utilisez /time [ville] pour l'heure mondiale.",
+      en: "{p} [question] (analyse d'image incluse)\n{p} créé une image de... (génère une image)\n{p} /imagine [prompt] (génère une image)\n{p} /time [ville] (donne l'heure)",
     },
   },
   onStart: async function () {},
   onChat: async function ({ api, event, args, message }) {
+    
+    if (API_KEY === "VOTRE_CLÉ_API_GEMINI_ICI" || !API_KEY) {
+        api.sendMessage("❌ Erreur de configuration : La commande 'gpt5' n'a pas de clé API Gemini.", event.threadID);
+        return;
+    }
+
     let waitingMessageID = null;
     const userMessageID = event.messageID;
+    const senderID = event.senderID;
+    const threadID = event.threadID; 
+    let prompt = event.body ? event.body.trim() : "";
+    let isReplyToBot = false;
 
+    // --- 1. DÉTECTION DE LA GÉNÉRATION (ACCÈS DIRECT) ---
+    const imageGenPrefix = ImageGenPrefixes.find((p) => prompt.toLowerCase().startsWith(p));
+    if (imageGenPrefix) {
+        const imagePrompt = prompt.substring(imageGenPrefix.length).trim();
+        if (!imagePrompt) {
+            api.sendMessage("Veuillez fournir une description de l'image à générer (ex: /imagine un chaton cybernétique).", threadID);
+            return;
+        }
+        
+        // NOUVEAU: Vérification du Cooldown
+        const cooldownLeft = checkCooldown(senderID);
+        if (cooldownLeft > 0) {
+            api.sendMessage(`⏳ Vous avez généré une image récemment. Veuillez patienter encore ${cooldownLeft} secondes. (Limite de 1/min)`, threadID);
+            return;
+        }
+        setCooldown(senderID); // Activer le cooldown
+        
+        api.setMessageReaction('🎨', userMessageID, (err) => {}, true);
+        await handleImageGeneration(api, event, imagePrompt);
+        return; 
+    }
+
+    // --- 2. DÉTECTION DE L'HORLOGE (ACCÈS DIRECT) ---
+    const timePrefix = TimePrefixes.find((p) => prompt.toLowerCase().startsWith(p));
+    if (timePrefix) {
+        const location = prompt.substring(timePrefix.length).trim();
+        if (!location) {
+            api.sendMessage("Veuillez spécifier la ville ou le pays (ex: /time Tokyo).", threadID);
+            return;
+        }
+        api.setMessageReaction('⏱️', userMessageID, (err) => {}, true); 
+        const timeResult = await getDateTimeForLocation(location);
+        api.sendMessage(`🌍 HORLOGE MONDIALE (Via Gemini)\n\n${timeResult}`, threadID);
+        api.setMessageReaction('☑️', userMessageID, (err) => {}, true);
+        return;
+    }
+
+    // --- 3. DÉTECTION DU CHAT (TEXTE / VISION / INTENTION DE GEN) ---
+    
+    if (event.type === "message_reply" && event.messageReply.senderID === api.getCurrentUserID()) {
+         if (botMessageIDs.has(event.messageReply.messageID)) {
+              isReplyToBot = true;
+         }
+    }
+    const prefix = Prefixes.find((p) => prompt.toLowerCase().startsWith(p));
+    
+    if (!isReplyToBot && !prefix) {
+      return; 
+    }
+    
+    if (prefix) {
+      prompt = prompt.substring(prefix.length).trim();
+    }
+
+    // --- DÉBUT DE LA LOGIQUE PRINCIPALE ---
     try {
       
-      const senderID = event.senderID;
-      const threadID = event.threadID; 
-      let prompt = event.body ? event.body.trim() : "";
-      let isReplyToBot = false;
+      let imageAttachment = (event.attachments && event.attachments.find(a => a.type === "photo" || a.type === "sticker")) || 
+                            (event.messageReply && event.messageReply.attachments && event.messageReply.attachments.find(a => a.type === "photo" || a.type === "sticker"));
 
-      // ... [Détection du préfixe et de l'activation (Reply, Time, ou standard) - La logique reste la même] ...
-      
-      // A) Détection de la réponse (Reply)
-      if (event.type === "message_reply" && event.messageReply.senderID === api.getCurrentUserID()) {
-           if (botMessageIDs.has(event.messageReply.messageID)) {
-                prompt = event.body.trim();
-                isReplyToBot = true;
-           } else {
-               return; // Réponse à un autre message que le début de conversation du bot
-           }
-      }
-
-      // B) Détection du préfixe
-      let prefix = null;
-      if (!isReplyToBot) {
-          
-          // Vérification des préfixes d'heure
-          const timePrefix = TimePrefixes.find((p) => event.body && event.body.toLowerCase().startsWith(p));
-          
-          if (timePrefix) {
-              const location = event.body.substring(timePrefix.length).trim();
-              
-              if (!location) {
-                  api.sendMessage("Veuillez spécifier la ville ou le pays dont vous souhaitez connaître l'heure et la date (ex: /time Tokyo).", threadID);
-                  return;
-              }
-              
-              // --- FONCTIONNALITÉ D'HORLOGE MONDIALE ---
-              api.setMessageReaction('⏱️', userMessageID, (err) => { /*... */ }, true); 
-              
-              const timeResult = await getDateTimeForLocation(location);
-              api.sendMessage(`🌍 HORLOGE MONDIALE (Via GPT5)\n\n${timeResult}`, threadID);
-              api.setMessageReaction('☑️', userMessageID, (err) => { /* ... */ }, true);
-              return; // Terminer après l'horloge
-          }
-          
-          // Vérification des préfixes standard
-          prefix = Prefixes.find((p) => event.body && event.body.toLowerCase().startsWith(p));
-          
-          if (!prefix) {
-            return; // Ni préfixe standard ni réponse au bot, ignorer
-          }
-          prompt = event.body.substring(prefix.length).trim();
-      }
-
-      // Si le prompt est vide après détection
-      if (!prompt) {
-        if (!isReplyToBot) {
-            api.sendMessage("Veuillez poser la question à votre convenance et je m'efforcerai de vous fournir une réponse efficace🤓. Votre satisfaction est ma priorité absolue😼. (𝙀́𝙙𝙞𝙩 𝙗𝙮 𝙏𝙠 𝙅𝙤𝙚𝙡 ㋡)", threadID);
-        }
-        return;
+      if (!prompt && !imageAttachment && !isReplyToBot) {
+          api.sendMessage("Veuillez poser une question, joindre une image, ou répondre à ma conversation. (𝙀́𝙙𝙞𝙩 𝙗𝙮 𝙏𝙠 J𝙤𝙚𝙡 ㋡)", threadID);
+          return;
       }
       
-      // ... [Messages d'attente et gestion de l'historique - La logique reste la même] ...
+      // NOUVEAU: Message d'attente dynamique
+      const waitingMessage = imageAttachment 
+          ? "💬🧘🏾‍♂| GPT-5 analyse ton image...⏳(𝙀́𝙙𝙞𝙩 𝙗𝙮 𝙏𝙠 𝙅𝙤𝙚𝙡 ㋡)" 
+          : "💬🧘🏾‍♂| GPT-5 réfléchit...⏳(𝙀́𝙙𝙞𝙩 𝙗𝙮 𝙏𝙠 𝙅𝙤𝙚𝙡 ㋡)";
       
-      // Réaction immédiate 🤖
-      api.setMessageReaction('🤖', userMessageID, (err) => {
-          if (err) console.error("Reaction 🤖 Error:", err);
-      }, true); 
-
-      // Envoi du message d'attente
-      api.sendMessage("💬🧘🏾‍♂| GPT-5  réfléchit... Veuillez patienter s'il-vous-plaît... (𝙀́𝙙𝙞𝙩 𝙗𝙮 𝙏𝙠 𝙅𝙤𝙚𝙡 ㋡)", threadID, (err, info) => {
-          if (!err && info && info.messageID) {
-              waitingMessageID = info.messageID;
-          } else if (err) {
-              console.error("Error sending waiting message:", err);
-          }
+      api.setMessageReaction('🤖', userMessageID, (err) => {}, true); 
+      api.sendMessage(waitingMessage, threadID, (err, info) => {
+          if (!err) waitingMessageID = info.messageID;
       });
       
-      await new Promise(resolve => setTimeout(resolve, 500)); 
+      // NOUVEAU: Analyse d'intention (Chat vs Image)
+      if (!isReplyToBot && !imageAttachment && prompt) {
+          const analysis = await analyzeUserIntent(prompt, conversationHistory[senderID]);
+          
+          if (analysis && analysis.intent === 'image') {
+              if (waitingMessageID) api.unsendMessage(waitingMessageID);
 
-      // 2. Récupération du nom d'utilisateur
+              // NOUVEAU: Vérification du Cooldown
+              const cooldownLeft = checkCooldown(senderID);
+              if (cooldownLeft > 0) {
+                  api.sendMessage(`⏳ Vous avez généré une image récemment. Veuillez patienter encore ${cooldownLeft} secondes. (Limite de 1/min)`, threadID);
+                  return;
+              }
+              setCooldown(senderID); // Activer le cooldown
+              
+              api.setMessageReaction('🎨', userMessageID, (err) => {}, true);
+              await handleImageGeneration(api, event, analysis.prompt);
+              return;
+          }
+      }
+
+      // --- LOGIQUE DE CHAT & VISION ---
+      
+      const geminiParts = []; 
+      if (imageAttachment) {
+          const imageData = await downloadAttachment(imageAttachment.url);
+          if (imageData) {
+              geminiParts.push({
+                  inlineData: {
+                      mimeType: imageData.mimeType,
+                      data: imageData.base64Data
+                  }
+              });
+          }
+      }
+
+      if (!prompt && imageAttachment) {
+          prompt = "Tu es un expert. Décris cette image en détail pour moi. Si c'est un exercice (maths, physique...), résous-le.";
+      }
+      
+      geminiParts.push({ text: prompt });
+      
       const userName = await getUserName(api, senderID);
-
-      // 3. Gestion de l'historique et du prompt pour la mémoire
       if (!conversationHistory[senderID]) {
           conversationHistory[senderID] = [];
       }
 
-      // --- CRÉATION DU PROMPT D'INSTRUCTION ET DE CONTEXTE ---
-      
       const currentDate = new Date().toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' });
       
-      let fullPrompt = 
-          `Tu es GPT-5, une IA amicale et serviable, basée sur la technologie CHATGPT. Ton créateur est Joel, un passionné d'informatique qui vit au Cameroun. Tu dois répondre en Français. ` + 
+      // NOUVEAU: Prompt système mis à jour
+      const systemPrompt = 
+          `Tu es GPT-5, une IA amicale, serviable et très compétente, basée sur Gemini 2.5 Flash. Ton créateur est Joel, un développeur passionné d'informatique qui vit au Cameroun. Tu dois répondre en Français. ` + 
           `INFORMATION IMPORTANTE : La date actuelle est le ${currentDate}. ` + 
-          `Tu as la capacité d'effectuer des recherches sur Internet pour répondre aux questions factuelles récentes. ` + 
-          `Tu dois intégrer le nom de l'utilisateur (${userName}) dans ta réponse de façon naturelle. Son nom est ${userName}.`;
-      
-      const historyText = conversationHistory[senderID].slice(-3).map(h => `[Moi: ${h.userPrompt}] [Toi: ${h.aiResponse}]`).join('; ');
-      
-      if (historyText) {
-          fullPrompt += ` CONTEXTE PRÉCÉDENT (3 derniers échanges): {${historyText}}`;
-      }
-      
-      fullPrompt += ` Question de ${userName} : "${prompt}". Réponds maintenant.`;
+          `Tu as la capacité d'effectuer des recherches sur Internet ET de voir les images qu'on t'envoie. ` + 
+          `L'utilisateur actuel s'appelle ${userName}. Tu dois intégrer son nom dans ta réponse de façon naturelle.`;
 
-      // --- APPEL DE L'API IA (Utilisation des paramètres pour la clarté) ---
+      const geminiChatHistory = [];
       
-      const requestParams = {
-          text: fullPrompt,
-          apikey: API_KEY // ENVOIE LA CLÉ (MÊME SI VIDE)
+      conversationHistory[senderID].slice(-5).forEach(exchange => {
+          geminiChatHistory.push({ role: "user", parts: exchange.userParts });
+          geminiChatHistory.push({ role: "model", parts: [{ text: exchange.aiResponse }] });
+      });
+      
+      geminiChatHistory.push({
+          role: "user",
+          parts: geminiParts 
+      });
+
+      const apiUrl = getGeminiApiUrl(GEMINI_FLASH_MODEL);
+      
+      const payload = {
+          contents: geminiChatHistory,
+          systemInstruction: {
+              parts: [{ text: systemPrompt }]
+          },
+          tools: [{ "google_search": {} }] 
       };
       
-      const response = await axios.get(AI_API_URL, { params: requestParams });
+      const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
       
-      // Récupération et nettoyage de la réponse
-      let answer = response.data.response || response.data.result || response.data.message || response.data.text; 
+      if (waitingMessageID) api.unsendMessage(waitingMessageID);
+
+      let answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
       
       if (typeof answer !== 'string' || answer.trim() === '') {
-          answer = "Désolé, l'IA GPT-5 (Meta AI) a retourné une réponse vide ou illisible.";
-      } else {
-          answer = answer.replace(/\[(?:Moi|Toi|User|AI)\]: ?/gi, '').trim(); 
-          answer = answer.replace(/\[(?:Moi|Toi|User|AI)\]/gi, '').trim(); 
+          if (response.data?.candidates?.[0]?.finishReason === 'SAFETY') {
+              answer = "Désolé, je ne peux pas répondre à cette demande car elle enfreint mes règles de sécurité.";
+          } else {
+              answer = "Désolé, l'IA (Gemini) a retourné une réponse vide ou illisible.";
+          }
       }
       
+      conversationHistory[senderID].push({
+          userParts: geminiParts, 
+          aiResponse: answer,
+          timestamp: Date.now()
+      });
       
-      // ... [Suppression du message d'attente, stockage de l'historique et envoi de la réponse finale - La logique reste la même] ...
-      
-      // Supprimer le message d'attente
-      if (waitingMessageID) {
-          api.unsendMessage(waitingMessageID, (err) => {
-              if (err) console.error("unsendMessage Error:", err);
-          });
-      }
-
-      // 4. Stocker le nouvel échange pour la mémoire, seulement si la réponse n'était pas un échec
-      if (answer !== "Désolé, l'IA GPT-5 (Meta AI) a retourné une réponse vide ou illisible.") {
-        conversationHistory[senderID].push({
-            userPrompt: prompt,
-            aiResponse: answer,
-            timestamp: Date.now()
-        });
-        
-        if (conversationHistory[senderID].length > 10) {
-            conversationHistory[senderID].shift(); 
-        }
+      if (conversationHistory[senderID].length > 10) { 
+          conversationHistory[senderID].shift(); 
       }
 
-      // 5. Envoi de la réponse finale
+      // NOUVEAU: Titre de réponse dynamique
+      const responseTitle = imageAttachment ? "🤖𝗖𝗛𝗔T 𝗚𝗣𝗧 𝟱 🖼️" : "🤖𝗖𝗛𝗔T 𝗚𝗣𝗧 𝟱";
+
       const finalAnswer = `━━━━━━━━━━━━━━━━
-     🤖𝗖𝗛𝗔𝗧 𝗚𝗣𝗧 𝟱
+     ${responseTitle}
 ━━━━━━━━━━━━━━━━
 \n\n${answer}
 
 ━━━━━━━ ✕ ━━━━━━━`; 
 
-      let finalMessageID = null;
       api.sendMessage(finalAnswer, threadID, (err, info) => {
-          if (!err && info && info.messageID) {
-              finalMessageID = info.messageID;
-              botMessageIDs.add(finalMessageID);
-          } else if (err) {
-              console.error("Error sending final message:", err);
-          }
-
-          // Changer la réaction pour ✅ ou ❌
-          const reaction = (answer.startsWith("Désolé, l'IA GPT-5 a retourné une réponse vide ou illisible.")) ? '❌' : '✅';
-          api.setMessageReaction(reaction, userMessageID, (err) => {
-              if (err) console.error(`Reaction ${reaction} Error:`, err);
-          }, true);
+          if (!err && info) botMessageIDs.add(info.messageID);
+          const reaction = (answer.startsWith("Désolé,")) ? '❌' : '✅';
+          api.setMessageReaction(reaction, userMessageID, (err) => {}, true);
       });
       
     } catch (error) {
-      console.error("Error:", error.message);
-      
-      // --- NOUVEAU DIAGNOSTIC POUR ERREUR 500 ---
-      let errorMessage = `❌ Une erreur est survenue lors de la communication avec l'API GPT-5 (Meta AI). (Code HTTP: ${error.response?.status || error.code || 'Inconnu'}).`;
-      
-      if (error.response?.status === 500) {
-          errorMessage = "❌ **Erreur Critique 500 (Internal Server Error).** Le serveur de l'API a eu un problème inattendu.";
-          if (!API_KEY) {
-              errorMessage += "\n\n💡 **Vérification :** Le serveur retourne souvent 500 si la **clé API est manquante** (`API_KEY` vide) ou invalide. Veuillez vérifier votre clé !";
-          }
-      } else if (error.response?.status === 400 || error.response?.status === 401) {
-          errorMessage = "❌ Erreur : La clé API est probablement invalide ou manquante. Veuillez vérifier `API_KEY`.";
-      }
-
-      // Supprimer le message d'attente en cas d'échec
-      if (waitingMessageID) {
-          api.unsendMessage(waitingMessageID, () => {});
-      }
-      
-      api.sendMessage(errorMessage, event.threadID);
-      
-      // Changer la réaction pour ❌ en cas d'échec final
-      api.setMessageReaction('❌', userMessageID, (err) => {
-          if (err) console.error("Reaction ❌ Error:", err);
-      }, true);
+        console.error("Erreur principale dans onChat (Vision/Texte):", error.message);
+        let errorMessage = `❌ Une erreur est survenue avec l'API Gemini. (Code: ${error.code || 'Inconnu'}).`;
+        if (error.response) {
+            const status = error.response.status;
+            const errorData = error.response.data?.error;
+            errorMessage = `❌ Erreur de l'API Gemini (HTTP ${status}).`;
+            if (status === 400) { errorMessage += "\n\n💡 **Vérification :** Erreur 'Bad Request' (400). L'image envoyée est peut-être corrompue ou trop volumineuse."; }
+            else if (status === 401 || status === 403) { errorMessage += `\n\n💡 **Vérification :** L'authentification a échoué. La clé API est invalide.`; }
+            else if (status === 429) { errorMessage += `\n\n💡 **Vérification :** Trop de requêtes (429). Limite de l'API atteinte. Veuillez patienter 1 minute.`; }
+            if (errorData) { errorMessage += `\n\nMessage: ${errorData.message}`; }
+        }
+        if (waitingMessageID) api.unsendMessage(waitingMessageID);
+        api.sendMessage(errorMessage, event.threadID);
+        api.setMessageReaction('❌', userMessageID, (err) => {}, true);
     }
   }
 };
