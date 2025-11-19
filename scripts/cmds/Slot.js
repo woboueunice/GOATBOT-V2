@@ -1,150 +1,128 @@
-/**
- * @author Joel (Inspiré par GoatBot V2)
- * @description Une commande de machine à sous dynamique avec animation et une belle mise en forme.
- * @usages [mise]
- * @example /slot 100
- */
-
-// Fonction utilitaire pour créer des délais (pauses)
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const axios = require("axios");
 
 module.exports.config = {
-  name: "slot",
-  version: "1.1.2", // J'ai mis à jour la version
-  credits: "Joel",
-  description: "Jouez à la machine à sous stylée avec animation.",
-  category: "economy",
-  usages: "[mise]",
-  cooldowns: 7 
+    name: "slot",
+    version: "2.0.0",
+    hasPermssion: 0,
+    credits: "Joel",
+    description: "Machine à sous stylée avec animation.",
+    commandCategory: "economy",
+    usages: "[mise]",
+    cooldowns: 5
 };
 
-// *** LA CORRECTION EST ICI ***
-// Ajout de la fonction onLoad requise par ton framework (loadScripts.js)
-module.exports.onLoad = function() {
-  // Pas besoin de faire quoi que ce soit au chargement pour cette commande.
-};
+// Fonction pour créer une pause (animation)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-module.exports.run = async function({ api, event, args, usersData }) {
-  const { senderID, threadID, messageID } = event;
+module.exports.onStart = async function({ api, event, args, usersData }) {
+    const { senderID, threadID, messageID } = event;
 
-  // --- 1. VALIDATION DE LA MISE ---
+    // =========================================================
+    // 1. VÉRIFICATIONS & ARGENT
+    // =========================================================
 
-  const mise = parseInt(args[0]);
+    const mise = parseInt(args[0]);
 
-  // Erreurs de base
-  if (isNaN(mise)) {
-    return api.sendMessage("Veuillez entrer une mise (un nombre) pour jouer.", threadID, messageID);
-  }
-  if (mise <= 0) {
-    return api.sendMessage("Votre mise doit être un nombre positif.", threadID, messageID);
-  }
+    // Vérif si c'est un nombre
+    if (isNaN(mise) || mise <= 0) {
+        return api.sendMessage("⚠️ **Erreur**\nVeuillez entrer une mise valide.\nEx: `/slot 100`", threadID, messageID);
+    }
 
-  try {
-    // Récupérer la balance de l'utilisateur
+    // Récupération du solde
     let userData = await usersData.get(senderID);
     let balance = userData.money || 0;
 
-    // Vérifier s'il a assez d'argent
+    // Vérif si assez d'argent
     if (balance < mise) {
-      return api.sendMessage(`Vous n'avez pas assez d'argent. Votre balance est de ${balance}$.`, threadID, messageID);
+        return api.sendMessage(`💵 **Fonds insuffisants !**\nVotre solde : ${balance}$\nMise nécessaire : ${mise}$`, threadID, messageID);
     }
 
-    // --- 2. LOGIQUE DU JEU (Symboles & Gains) ---
+    // =========================================================
+    // 2. LOGIQUE DU JEU
+    // =========================================================
 
-    // Pool de symboles (probabilités pondérées)
-    // 🍒(x5), 🍋(x4), 🔔(x3), 💰(x2), 7️⃣(x1)
-    const symbols = ["🍒", "🍒", "🍒", "🍒", "🍒", "🍋", "🍋", "🍋", "🍋", "🔔", "🔔", "🔔", "💰", "💰", "7️⃣"];
+    // Symboles (plus il y a de cerises, plus c'est facile d'en avoir, le 7 est rare)
+    const symbols = ["🍒", "🍒", "🍒", "🍒", "🍋", "🍋", "🍋", "🔔", "🔔", "💰", "💰", "7️⃣"];
     
-    // Table des gains (multiplicateurs)
+    // Gains
     const payouts = {
-      "🍒": 3,  // 3 cerises = 3x la mise
-      "🍋": 5,  // 3 citrons = 5x la mise
-      "🔔": 10, // 3 cloches = 10x la mise
-      "💰": 25, // 3 sacs = 25x la mise
-      "7️⃣": 100 // 3 sept = JACKPOT 100x la mise
+        "🍒": 3,
+        "🍋": 5,
+        "🔔": 10,
+        "💰": 25,
+        "7️⃣": 100 // Jackpot
     };
 
-    // Fonction pour un tirage
-    function spinReel() {
-      return symbols[Math.floor(Math.random() * symbols.length)];
+    function spin() {
+        return symbols[Math.floor(Math.random() * symbols.length)];
     }
 
-    // Lancer les 3 bobines
-    const reel1 = spinReel();
-    const reel2 = spinReel();
-    const reel3 = spinReel();
-    const resultReels = [reel1, reel2, reel3];
+    const r1 = spin();
+    const r2 = spin();
+    const r3 = spin();
+    const reels = [r1, r2, r3];
 
-    // Calculer les gains
+    let isWin = false;
     let winnings = 0;
     let multiplier = 0;
-    let isWin = false;
 
-    if (reel1 === reel2 && reel2 === reel3) {
-      // C'est une victoire !
-      isWin = true;
-      multiplier = payouts[reel1];
-      winnings = mise * multiplier;
+    // Logique : 3 symboles identiques
+    if (r1 === r2 && r2 === r3) {
+        isWin = true;
+        multiplier = payouts[r1];
+        winnings = mise * multiplier;
     }
 
-    // --- 3. ANIMATION ET MISE À JOUR ---
-
-    // Indiquer que le bot "réfléchit"
-    api.sendTypingIndicator(threadID);
-    // Réagir au message du joueur
-    api.setMessageReaction("👍", messageID);
-
-    // Envoyer le message initial d'animation
-    const spinMessage = await api.sendMessage("🎰 Lancement du tirage...", threadID);
-    const messageIDToEdit = spinMessage.messageID;
-
-    // Animation de spin (modification du message)
-    try {
-      await delay(1000);
-      api.editMessage("🎰 [ ❓ | ❓ | ❓ ]", messageIDToEdit);
-      await delay(1000);
-      api.editMessage(`🎰 [ ${resultReels[0]} | ❓ | ❓ ]`, messageIDToEdit);
-      await delay(1000);
-      api.editMessage(`🎰 [ ${resultReels[0]} | ${resultReels[1]} | ❓ ]`, messageIDToEdit);
-      await delay(1000);
-      api.editMessage(`🎰 [ ${resultReels[0]} | ${resultReels[1]} | ${resultReels[2]} ]`, messageIDToEdit);
-      await delay(1500); // Pause dramatique avant le résultat
-    } catch (e) {
-      console.log("Erreur lors de l'édition du message (peut-être supprimé):", e);
-    }
-
-    // --- 4. RÉSULTAT FINAL ET FORMATAGE ---
-
-    let finalBalance;
-    let resultEmoji;
-    let resultText;
-    let gainLossText;
-
-    if (isWin) {
-      finalBalance = balance - mise + winnings;
-      resultEmoji = "🎉";
-      if (multiplier === 100) {
-        resultText = "👑 JACKPOT !!";
-        gainLossText = `𝐘𝐎𝐔 𝐖𝐎𝐍 ${winnings}$`;
-      } else {
-        resultText = "🎊 𝐌𝐀𝐓𝐂H !";
-        gainLossText = `𝐘𝐎U 𝐖𝐎𝐍 ${winnings}$ (x${multiplier})`;
-      }
-    } else {
-      finalBalance = balance - mise;
-      resultEmoji = "😢";
-      resultText = "💀 𝐍𝐎 𝐌𝐀𝐓𝐂H.";
-      gainLossText = `𝐘𝐎𝐔 𝐋𝐎𝐒T ${mise}$`;
-    }
-
-    // Mettre à jour la base de données
+    // Calcul du nouveau solde
+    // Si perdu : Solde - mise
+    // Si gagné : (Solde - mise) + gain
+    let finalBalance = isWin ? (balance - mise + winnings) : (balance - mise);
+    
+    // Sauvegarde immédiate pour éviter la triche
     await usersData.set(senderID, { money: finalBalance });
 
-    // Construire le message final (ton format stylé)
-    const finalMessageBody = `━━━━━━━━━━━━━━
+    // =========================================================
+    // 3. ANIMATION & AFFICHAGE (Le Design que tu aimes)
+    // =========================================================
+
+    // 1. Indicateur de frappe
+    api.sendTypingIndicator(threadID);
+
+    // 2. Message de lancement
+    let spinMsg = await api.sendMessage("🎰 **Lancement des rouleaux...**", threadID);
+
+    // 3. Animation des rouleaux (Fake spin)
+    try {
+        await delay(800);
+        await api.editMessage(`🎰 [ ❓ | ❓ | ❓ ]`, spinMsg.messageID);
+        await delay(800);
+        await api.editMessage(`🎰 [ ${r1} | ❓ | ❓ ]`, spinMsg.messageID);
+        await delay(800);
+        await api.editMessage(`🎰 [ ${r1} | ${r2} | ❓ ]`, spinMsg.messageID);
+        await delay(800);
+        await api.editMessage(`🎰 [ ${r1} | ${r2} | ${r3} ]`, spinMsg.messageID);
+        await delay(500);
+    } catch (e) {
+        // Si Facebook bloque l'édit, on ignore
+    }
+
+    // 4. Préparation du message final (Ton design exact)
+    let resultEmoji, resultText, gainLossText;
+
+    if (isWin) {
+        resultEmoji = multiplier === 100 ? "👑" : "🎉";
+        resultText = multiplier === 100 ? "𝐉𝐀𝐂𝐊𝐏𝐎𝐓 !!" : "𝐌𝐀𝐓𝐂𝐇 !";
+        gainLossText = `𝐘𝐎𝐔 𝐖𝐎𝐍 ${winnings}$ (x${multiplier})`;
+    } else {
+        resultEmoji = "💀";
+        resultText = "𝐍𝐎 𝐌𝐀𝐓𝐂𝐇.";
+        gainLossText = `𝐘𝐎𝐔 𝐋𝐎𝐒𝐓 ${mise}$`;
+    }
+
+    const finalBody = `━━━━━━━━━━━━━━
 🎰 𝐒𝐋𝐎𝐓 𝐌𝐀𝐂𝐇𝐈𝐍𝐄
 ╭─╼━━━━━━━━━━╾─╮
-│     ${resultReels.join(" | ")}
+│   ${r1}  |  ${r2}  |  ${r3}
 │
 │  ${resultEmoji} ${resultText}
 │  ${gainLossText}
@@ -152,34 +130,29 @@ module.exports.run = async function({ api, event, args, usersData }) {
 💰 𝐁𝐀𝐋𝐀𝐍𝐂𝐄: ${finalBalance}$
 ━━━━━━━━━━━━━━`;
 
-    // Envoyer le résultat final en modifiant le message d'animation
-    api.editMessage(finalMessageBody, messageIDToEdit, async (err) => {
-      if (err) {
-        console.log("Échec de l'édition, envoi d'un nouveau message.", err);
-        api.sendMessage(finalMessageBody, threadID);
-      } else {
-        // Si l'édition réussit, réagir au message
-        api.setMessageReaction(isWin ? "🎉" : "😢", messageIDToEdit);
-        
-        // (Idée bonus : le GIF Jackpot)
-        if (multiplier === 100) {
+    // 5. Envoi du résultat
+    // On essaie d'éditer le message d'animation pour que ce soit fluide
+    api.editMessage(finalBody, spinMsg.messageID, async (err) => {
+        if (err) {
+            // Si l'edit bug, on envoie un nouveau message
+            api.sendMessage(finalBody, threadID);
+        } else {
+            // Réaction finale
+            api.setMessageReaction(isWin ? "🎉" : "😢", spinMsg.messageID, () => {}, true);
+        }
+
+        // Petit bonus : GIF si Jackpot (Optionnel)
+        if (isWin && multiplier >= 25) {
             try {
-                const axios = require("axios");
-                const gifStream = (await axios.get("https://i.giphy.com/media/l41YCERXqdx82S7uM/giphy.gif", { responseType: "stream" })).data;
-                api.sendMessage({
-                    body: "FÉLICITATIONS POUR LE JACKPOT !",
-                    attachment: gifStream
-                }, threadID);
-            } catch (gifError) {
-                console.error("Erreur lors de l'envoi du GIF Jackpot:", gifError);
-                api.sendMessage("FÉLICITATIONS POUR LE JACKPOT ! (Impossible de charger le GIF)", threadID);
+                const gifLink = multiplier === 100 
+                    ? "https://i.giphy.com/media/l41YCERXqdx82S7uM/giphy.gif" // Jackpot
+                    : "https://media.giphy.com/media/StKiS6x698JAl9d6Zj/giphy.gif"; // Win
+                
+                const gifStream = (await axios.get(gifLink, { responseType: "stream" })).data;
+                api.sendMessage({ attachment: gifStream }, threadID);
+            } catch (e) {
+                // Pas grave si le gif échoue
             }
         }
-      }
     });
-
-  } catch (error) {
-    console.error("[SLOT_MACHINE] Erreur:", error);
-    api.sendMessage("Une erreur est survenue lors du jeu. Réessayez plus tard.", threadID);
-  }
 };
