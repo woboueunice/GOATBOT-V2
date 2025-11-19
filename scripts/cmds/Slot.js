@@ -2,16 +2,16 @@ const axios = require("axios");
 
 module.exports.config = {
     name: "slot",
-    version: "2.0.0",
+    version: "2.1.0",
     hasPermssion: 0,
     credits: "Joel",
-    description: "Machine à sous stylée avec animation.",
+    description: "Machine à sous (Version Stable)",
     commandCategory: "economy",
     usages: "[mise]",
     cooldowns: 5
 };
 
-// Fonction pour créer une pause (animation)
+// Fonction pour créer une pause (Suspense)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 module.exports.onStart = async function({ api, event, args, usersData }) {
@@ -41,7 +41,7 @@ module.exports.onStart = async function({ api, event, args, usersData }) {
     // 2. LOGIQUE DU JEU
     // =========================================================
 
-    // Symboles (plus il y a de cerises, plus c'est facile d'en avoir, le 7 est rare)
+    // Symboles
     const symbols = ["🍒", "🍒", "🍒", "🍒", "🍋", "🍋", "🍋", "🔔", "🔔", "💰", "💰", "7️⃣"];
     
     // Gains
@@ -60,7 +60,8 @@ module.exports.onStart = async function({ api, event, args, usersData }) {
     const r1 = spin();
     const r2 = spin();
     const r3 = spin();
-    const reels = [r1, r2, r3];
+    // On garde tes symboles pour le visuel
+    const resultReels = [r1, r2, r3];
 
     let isWin = false;
     let winnings = 0;
@@ -74,39 +75,37 @@ module.exports.onStart = async function({ api, event, args, usersData }) {
     }
 
     // Calcul du nouveau solde
-    // Si perdu : Solde - mise
-    // Si gagné : (Solde - mise) + gain
     let finalBalance = isWin ? (balance - mise + winnings) : (balance - mise);
     
-    // Sauvegarde immédiate pour éviter la triche
+    // Sauvegarde immédiate
     await usersData.set(senderID, { money: finalBalance });
 
     // =========================================================
-    // 3. ANIMATION & AFFICHAGE (Le Design que tu aimes)
+    // 3. ANIMATION & AFFICHAGE (Compatible GoatBot V2)
     // =========================================================
 
     // 1. Indicateur de frappe
     api.sendTypingIndicator(threadID);
 
-    // 2. Message de lancement
-    let spinMsg = await api.sendMessage("🎰 **Lancement des rouleaux...**", threadID);
-
-    // 3. Animation des rouleaux (Fake spin)
+    // 2. Message de lancement (On n'utilise pas editMessage ici)
+    let spinMsgInfo;
     try {
-        await delay(800);
-        await api.editMessage(`🎰 [ ❓ | ❓ | ❓ ]`, spinMsg.messageID);
-        await delay(800);
-        await api.editMessage(`🎰 [ ${r1} | ❓ | ❓ ]`, spinMsg.messageID);
-        await delay(800);
-        await api.editMessage(`🎰 [ ${r1} | ${r2} | ❓ ]`, spinMsg.messageID);
-        await delay(800);
-        await api.editMessage(`🎰 [ ${r1} | ${r2} | ${r3} ]`, spinMsg.messageID);
-        await delay(500);
+        spinMsgInfo = await api.sendMessage("🎰 **Les rouleaux tournent...**", threadID);
     } catch (e) {
-        // Si Facebook bloque l'édit, on ignore
+        // Si erreur d'envoi, on stop
+        return;
     }
 
-    // 4. Préparation du message final (Ton design exact)
+    // 3. Pause de suspense (2 secondes)
+    await delay(2000);
+
+    // 4. Suppression du message "Les rouleaux tournent..."
+    // C'est ça qui remplace l'animation qui buggait
+    if (spinMsgInfo) {
+        api.unsendMessage(spinMsgInfo.messageID);
+    }
+
+    // 5. Préparation du message final (Ton design exact)
     let resultEmoji, resultText, gainLossText;
 
     if (isWin) {
@@ -130,23 +129,19 @@ module.exports.onStart = async function({ api, event, args, usersData }) {
 💰 𝐁𝐀𝐋𝐀𝐍𝐂𝐄: ${finalBalance}$
 ━━━━━━━━━━━━━━`;
 
-    // 5. Envoi du résultat
-    // On essaie d'éditer le message d'animation pour que ce soit fluide
-    api.editMessage(finalBody, spinMsg.messageID, async (err) => {
-        if (err) {
-            // Si l'edit bug, on envoie un nouveau message
-            api.sendMessage(finalBody, threadID);
-        } else {
-            // Réaction finale
-            api.setMessageReaction(isWin ? "🎉" : "😢", spinMsg.messageID, () => {}, true);
+    // 6. Envoi du résultat final
+    api.sendMessage(finalBody, threadID, async (err) => {
+        if (!err) {
+            // Réaction finale sur le résultat
+            api.setMessageReaction(isWin ? "🎉" : "😢", messageID, () => {}, true);
         }
 
         // Petit bonus : GIF si Jackpot (Optionnel)
         if (isWin && multiplier >= 25) {
             try {
                 const gifLink = multiplier === 100 
-                    ? "https://i.giphy.com/media/l41YCERXqdx82S7uM/giphy.gif" // Jackpot
-                    : "https://media.giphy.com/media/StKiS6x698JAl9d6Zj/giphy.gif"; // Win
+                    ? "https://i.giphy.com/media/l41YCERXqdx82S7uM/giphy.gif" 
+                    : "https://media.giphy.com/media/StKiS6x698JAl9d6Zj/giphy.gif"; 
                 
                 const gifStream = (await axios.get(gifLink, { responseType: "stream" })).data;
                 api.sendMessage({ attachment: gifStream }, threadID);
