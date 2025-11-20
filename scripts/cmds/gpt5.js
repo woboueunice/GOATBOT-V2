@@ -10,7 +10,7 @@ const GEMINI_FLASH_MODEL = 'gemini-2.5-flash-preview-09-2025';
 const GEMINI_IMAGE_GEN_MODEL = 'gemini-2.5-flash-image-preview';
 
 // 🚨 VOTRE CLÉ API GEMINI 🚨
-const API_KEY = "AIzaSyAbnxZuCt5Lv3VC4x3sU0PZGphN05alRNs"; // 👈 Votre clé est ici.
+const API_KEY = "AIzaSyABvZSSfYCrRk5CNMEvZkAZQNWYCJ1tjDc"; // 👈 Votre clé est ici.
 
 // Assurer que le dossier temporaire existe
 const tmpPath = path.join(__dirname, 'tmp');
