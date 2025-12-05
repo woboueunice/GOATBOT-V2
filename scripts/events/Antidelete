@@ -1,0 +1,106 @@
+const axios = require('axios');
+const fs = require('fs-extra');
+const path = require('path');
+
+module.exports.config = {
+    name: "antidelete",
+    eventType: ["message", "message_reply", "message_unsend"], // On écoute tout : réception et suppression
+    version: "1.0",
+    credits: "Joel",
+    description: "Détecte les messages supprimés et les envoie dans un groupe d'archives."
+};
+
+// Création d'une mémoire temporaire globale pour stocker les messages récents
+if (!global.messageCache) {
+    global.messageCache = new Map();
+}
+
+module.exports.onEvent = async function ({ api, event }) {
+    const ADMIN_THREAD_ID = "1796368234344694"; // Ton groupe de sauvegarde
+
+    // 1. SAUVEGARDE (Quand quelqu'un envoie un message)
+    if (event.type === "message" || event.type === "message_reply") {
+        // On garde le message en mémoire
+        global.messageCache.set(event.messageID, {
+            body: event.body,
+            senderID: event.senderID,
+            attachments: event.attachments || [],
+            timestamp: Date.now()
+        });
+
+        // Nettoyage : Si la mémoire est trop pleine (+1000 msgs), on supprime les vieux
+        if (global.messageCache.size > 1000) {
+            const oldestKey = global.messageCache.keys().next().value;
+            global.messageCache.delete(oldestKey);
+        }
+    }
+
+    // 2. DÉTECTION (Quand quelqu'un supprime un message)
+    if (event.type === "message_unsend") {
+        const deletedID = event.messageID;
+
+        // On vérifie si on a le message en mémoire
+        if (global.messageCache.has(deletedID)) {
+            const msg = global.messageCache.get(deletedID);
+            
+            // On récupère le nom de celui qui a supprimé
+            let name = "Utilisateur inconnu";
+            try {
+                const userInfo = await api.getUserInfo(msg.senderID);
+                name = userInfo[msg.senderID].name;
+            } catch (e) {
+                name = msg.senderID;
+            }
+
+            // Construction du rapport
+            let report = `🗑️ **MESSAGE SUPPRIMÉ DÉTECTÉ**\n━━━━━━━━━━━━━━━━\n`;
+            report += `👤 **Auteur :** ${name}\n`;
+            report += `📍 **Groupe ID :** ${event.threadID}\n`;
+            report += `🕒 **Date :** ${new Date().toLocaleString()}\n`;
+            report += `━━━━━━━━━━━━━━━━\n`;
+            report += `📝 **Contenu :**\n${msg.body || "(Aucun texte)"}`;
+
+            // Gestion des pièces jointes (Photos, Vidéos...)
+            const attachments = [];
+            if (msg.attachments.length > 0) {
+                report += `\n\n📎 **Pièces jointes :** ${msg.attachments.length} fichier(s).`;
+                
+                // On essaie de récupérer les fichiers
+                for (let i = 0; i < msg.attachments.length; i++) {
+                    const attach = msg.attachments[i];
+                    try {
+                        const url = attach.url;
+                        const ext = attach.type === "photo" ? ".jpg" : 
+                                   attach.type === "video" ? ".mp4" : 
+                                   attach.type === "audio" ? ".mp3" : ".bin";
+                        
+                        const fileName = `del_${deletedID}_${i}${ext}`;
+                        const filePath = path.join(__dirname, 'cache', fileName);
+
+                        // Création dossier cache si nécessaire
+                        if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+                        const res = await axios.get(url, { responseType: 'arraybuffer' });
+                        fs.writeFileSync(filePath, Buffer.from(res.data));
+                        attachments.push(fs.createReadStream(filePath));
+                    } catch (e) {
+                        report += `\n❌ (Erreur récup fichier ${i+1})`;
+                    }
+                }
+            }
+
+            // Envoi vers le groupe ADMIN (1796368234344694)
+            const msgData = {
+                body: report,
+                attachment: attachments
+            };
+
+            api.sendMessage(msgData, ADMIN_THREAD_ID, () => {
+                // Nettoyage des fichiers temporaires après envoi
+                attachments.forEach(stream => {
+                    try { fs.unlinkSync(stream.path); } catch(e) {}
+                });
+            });
+        }
+    }
+};
