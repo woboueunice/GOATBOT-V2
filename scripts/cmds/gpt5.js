@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 
 // --- Configuration API Gemini ---
-const GEMINI_FLASH_MODEL = 'gemini-1.5-flash'; 
-const GEMINI_IMAGE_GEN_MODEL = 'gemini-1.5-flash'; 
+// ✅ CORRECTION ICI : On utilise le nom complet et stable
+const GEMINI_FLASH_MODEL = 'gemini-1.5-flash-latest'; 
+const GEMINI_IMAGE_GEN_MODEL = 'gemini-1.5-flash-latest'; 
 
 // Assurer que le dossier temporaire existe
 const tmpPath = path.join(__dirname, 'tmp');
@@ -42,11 +43,6 @@ async function downloadAttachment(url) {
         console.error("Erreur téléchargement:", error.message);
         return null;
     }
-}
-
-async function handleImageGeneration(api, event, prompt, apiKey) {
-    // (Fonction simplifiée pour l'exemple, nécessite config Vertex AI pour vraie image)
-    api.sendMessage("⚠️ Note : La création d'image directe nécessite une configuration Vertex AI. J'analyse plutôt le texte et les images pour le moment.", event.threadID);
 }
 
 async function analyzeUserIntent(userPrompt, chatHistory, apiKey) {
@@ -103,14 +99,14 @@ function setCooldown(senderID) {
 }
 
 // =========================================================
-// 2. LOGIQUE PRINCIPALE (AVEC DIAGNOSTIC)
+// 2. LOGIQUE PRINCIPALE (AVEC PROTECTION ANTI-SPAM)
 // =========================================================
 
 module.exports = {
   config: {
     name: "gpt5",
     aliases: ['chatgpt'],
-    version: "5.2-Debug", 
+    version: "5.3-Stable", 
     author: "Joel",
     longDescription: "GPT-5 (Gemini) : Chat, Vision & Analyse.",
     category: "ai",
@@ -119,14 +115,14 @@ module.exports = {
   onStart: async function () {},
   onChat: async function ({ api, event, args, message }) {
     
-    // 1. Définition des variables de base
+    // 1. Définition des variables
     const userMessageID = event.messageID;
     const senderID = event.senderID;
     const threadID = event.threadID; 
     let prompt = event.body ? event.body.trim() : "";
     let isReplyToBot = false;
 
-    // 2. DÉTECTION : Est-ce que l'utilisateur parle au bot ?
+    // 2. DÉTECTION
     const imageGenPrefix = ImageGenPrefixes.find((p) => prompt.toLowerCase().startsWith(p));
     const timePrefix = TimePrefixes.find((p) => prompt.toLowerCase().startsWith(p));
     if (event.type === "message_reply" && event.messageReply.senderID === api.getCurrentUserID()) {
@@ -134,21 +130,19 @@ module.exports = {
     }
     const prefix = Prefixes.find((p) => prompt.toLowerCase().startsWith(p));
 
-    // 🛑 FILTRE : Si ce n'est pas pour le bot, on arrête ici.
-    if (!imageGenPrefix && !timePrefix && !isReplyToBot && !prefix) {
-        return; 
-    }
+    // 🛑 FILTRE
+    if (!imageGenPrefix && !timePrefix && !isReplyToBot && !prefix) return; 
 
     // 🔐 3. VÉRIFICATION CLÉ API
     const API_KEY = process.env.GEMINI_API_KEY;
     if (!API_KEY) {
-        return api.sendMessage("❌ Erreur critique : La variable d'environnement 'GEMINI_API_KEY' n'est pas configurée sur Render.", threadID);
+        return api.sendMessage("❌ Erreur : Clé API manquante dans Render.", threadID);
     }
 
     // --- 4. EXÉCUTION ---
 
     if (imageGenPrefix) {
-        api.sendMessage("⚠️ La génération d'image nécessite une configuration Vertex AI avancée.", threadID);
+        api.sendMessage("⚠️ La génération d'image nécessite une clé Vertex AI.", threadID);
         return; 
     }
 
@@ -166,14 +160,11 @@ module.exports = {
                             (event.messageReply && event.messageReply.attachments && event.messageReply.attachments.find(a => a.type === "photo" || a.type === "sticker"));
 
       if (!prompt && !imageAttachment && !isReplyToBot) {
-          return api.sendMessage("Bonjour Joel ! Pose une question ou envoie une image.", threadID);
+          return api.sendMessage("Bonjour Joel ! Pose une question.", threadID);
       }
       
-      const waitingMessage = imageAttachment ? "👁️ Analyse visuelle..." : "💬 GPT-5 réfléchit...";
-      
+      // Message d'attente
       api.setMessageReaction('⏳', userMessageID, (err) => {}, true); 
-      let waitingMessageID = null;
-      api.sendMessage(waitingMessage, threadID, (err, info) => { if (!err) waitingMessageID = info.messageID; });
       
       // Analyse
       const geminiParts = []; 
@@ -191,7 +182,7 @@ module.exports = {
       if (!conversationHistory[senderID]) conversationHistory[senderID] = [];
 
       const currentDate = new Date().toLocaleDateString('fr-FR');
-      const systemPrompt = `Tu es GPT-5, IA créée par Joel. Date: ${currentDate}. Utilisateur: ${userName}. Réponds en Français, sois utile et précis.`;
+      const systemPrompt = `Tu es GPT-5, IA créée par Joel. Date: ${currentDate}. Utilisateur: ${userName}. Réponds en Français.`;
 
       const geminiChatHistory = [];
       conversationHistory[senderID].slice(-5).forEach(exchange => {
@@ -204,8 +195,6 @@ module.exports = {
       const payload = { contents: geminiChatHistory, systemInstruction: { parts: [{ text: systemPrompt }] } };
       
       const response = await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-      
-      if (waitingMessageID) api.unsendMessage(waitingMessageID);
 
       let answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "⚠️ Erreur interne Gemini.";
       
@@ -215,31 +204,28 @@ module.exports = {
       const responseTitle = imageAttachment ? "🤖 𝗚𝗣𝗧-𝟱 𝗩𝗶𝘀𝗶𝗼𝗻" : "🤖 𝗚𝗣𝗧-𝟱";
       const finalAnswer = `━━━━━━━━━━━━━━━━\n ${responseTitle}\n━━━━━━━━━━━━━━━━\n\n${answer}\n\n━━━━━━━━━━━━━━━━`; 
 
-      api.sendMessage(finalAnswer, threadID, (err, info) => {
-          if (!err && info) botMessageIDs.add(info.messageID);
-          api.setMessageReaction('✅', userMessageID, (err) => {}, true);
-      });
+      // 🛑 PROTECTION ANTI-SPAM (Délai 2s)
+      setTimeout(() => {
+          api.sendMessage(finalAnswer, threadID, (err, info) => {
+              if (!err && info) botMessageIDs.add(info.messageID);
+              api.setMessageReaction('✅', userMessageID, (err) => {}, true);
+          });
+      }, 2000); 
       
     } catch (error) {
-        // --- DIAGNOSTIC D'ERREUR ---
-        const errData = error.response ? error.response.data : null;
+        // --- DIAGNOSTIC CORRIGÉ ---
         const errStatus = error.response ? error.response.status : "Inconnu";
-        
         let msg = `❌ Erreur Google (Code: ${errStatus})\n`;
         
-        if (errStatus === 400) {
-            msg += "⚠️ Clé API invalide ou requête mal formée. (Vérifie qu'il n'y a pas d'espace avant/après la clé sur Render)";
-        } else if (errStatus === 403) {
-            msg += "⛔ Permission refusée. (Ta clé est peut-être bannie ou mal configurée dans Google AI Studio)";
-        } else if (errStatus === 429) {
-            msg += "⏳ Trop de demandes. (Quota gratuit dépassé, attends 2 minutes)";
-        } else if (errData && errData.error && errData.error.message) {
-            msg += `Détail : ${errData.error.message}`;
+        if (errStatus === 404) {
+             msg += "⚠️ Modèle introuvable. Essaie de changer 'gemini-1.5-flash-latest' par 'gemini-pro' dans le code.";
+        } else if (errStatus === 400) {
+            msg += "⚠️ Requête invalide (Vérifie la clé sur Render, attention aux espaces).";
         } else {
             msg += `Détail : ${error.message}`;
         }
 
-        console.error("ERREUR GEMINI:", error);
+        console.error("ERREUR GEMINI:", error.message);
         api.sendMessage(msg, threadID);
         api.setMessageReaction('❌', userMessageID, (err) => {}, true);
     }
