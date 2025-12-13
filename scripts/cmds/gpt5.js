@@ -1,11 +1,12 @@
+
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
 // --- Configuration API Gemini ---
-// ✅ CORRECTION ICI : On utilise le nom complet et stable
-const GEMINI_FLASH_MODEL = 'gemini-1.5-flash-latest'; 
-const GEMINI_IMAGE_GEN_MODEL = 'gemini-1.5-flash-latest'; 
+// ✅ CORRECTION : On revient au nom standard qui fonctionne partout
+const GEMINI_FLASH_MODEL = 'gemini-1.5-flash'; 
+const GEMINI_IMAGE_GEN_MODEL = 'gemini-1.5-flash'; 
 
 // Assurer que le dossier temporaire existe
 const tmpPath = path.join(__dirname, 'tmp');
@@ -16,7 +17,7 @@ if (!fs.existsSync(tmpPath)) {
 // Objets de gestion
 const conversationHistory = {};
 const botMessageIDs = new Set();
-// Cooldown pour éviter le spam
+// Cooldown pour éviter le spam et le ban Facebook
 const IMAGE_GEN_COOLDOWN_MS = 60000; 
 const imageGenCooldown = new Map();
 
@@ -84,29 +85,15 @@ async function getUserName(api, senderID) {
     } catch (error) { return `Utilisateur`; }
 }
 
-function checkCooldown(senderID) {
-    const now = Date.now();
-    if (imageGenCooldown.has(senderID)) {
-        const timeElapsed = now - imageGenCooldown.get(senderID);
-        if (timeElapsed < IMAGE_GEN_COOLDOWN_MS) return Math.ceil((IMAGE_GEN_COOLDOWN_MS - timeElapsed) / 1000);
-    }
-    return 0;
-}
-
-function setCooldown(senderID) {
-    imageGenCooldown.set(senderID, Date.now());
-    setTimeout(() => { imageGenCooldown.delete(senderID); }, IMAGE_GEN_COOLDOWN_MS);
-}
-
 // =========================================================
-// 2. LOGIQUE PRINCIPALE (AVEC PROTECTION ANTI-SPAM)
+// 2. LOGIQUE PRINCIPALE
 // =========================================================
 
 module.exports = {
   config: {
     name: "gpt5",
     aliases: ['chatgpt'],
-    version: "5.3-Stable", 
+    version: "5.4-Final", 
     author: "Joel",
     longDescription: "GPT-5 (Gemini) : Chat, Vision & Analyse.",
     category: "ai",
@@ -115,14 +102,13 @@ module.exports = {
   onStart: async function () {},
   onChat: async function ({ api, event, args, message }) {
     
-    // 1. Définition des variables
     const userMessageID = event.messageID;
     const senderID = event.senderID;
     const threadID = event.threadID; 
     let prompt = event.body ? event.body.trim() : "";
     let isReplyToBot = false;
 
-    // 2. DÉTECTION
+    // Détection
     const imageGenPrefix = ImageGenPrefixes.find((p) => prompt.toLowerCase().startsWith(p));
     const timePrefix = TimePrefixes.find((p) => prompt.toLowerCase().startsWith(p));
     if (event.type === "message_reply" && event.messageReply.senderID === api.getCurrentUserID()) {
@@ -130,17 +116,15 @@ module.exports = {
     }
     const prefix = Prefixes.find((p) => prompt.toLowerCase().startsWith(p));
 
-    // 🛑 FILTRE
     if (!imageGenPrefix && !timePrefix && !isReplyToBot && !prefix) return; 
 
-    // 🔐 3. VÉRIFICATION CLÉ API
+    // Vérification Clé
     const API_KEY = process.env.GEMINI_API_KEY;
     if (!API_KEY) {
-        return api.sendMessage("❌ Erreur : Clé API manquante dans Render.", threadID);
+        return api.sendMessage("❌ Erreur : Clé API manquante sur Render.", threadID);
     }
 
-    // --- 4. EXÉCUTION ---
-
+    // Commandes Spéciales
     if (imageGenPrefix) {
         api.sendMessage("⚠️ La génération d'image nécessite une clé Vertex AI.", threadID);
         return; 
@@ -155,6 +139,7 @@ module.exports = {
 
     if (prefix) prompt = prompt.substring(prefix.length).trim();
 
+    // Logique Chat & Vision
     try {
       let imageAttachment = (event.attachments && event.attachments.find(a => a.type === "photo" || a.type === "sticker")) || 
                             (event.messageReply && event.messageReply.attachments && event.messageReply.attachments.find(a => a.type === "photo" || a.type === "sticker"));
@@ -163,10 +148,8 @@ module.exports = {
           return api.sendMessage("Bonjour Joel ! Pose une question.", threadID);
       }
       
-      // Message d'attente
       api.setMessageReaction('⏳', userMessageID, (err) => {}, true); 
       
-      // Analyse
       const geminiParts = []; 
       if (imageAttachment) {
           const imageData = await downloadAttachment(imageAttachment.url);
@@ -182,7 +165,8 @@ module.exports = {
       if (!conversationHistory[senderID]) conversationHistory[senderID] = [];
 
       const currentDate = new Date().toLocaleDateString('fr-FR');
-      const systemPrompt = `Tu es GPT-5, IA créée par Joel. Date: ${currentDate}. Utilisateur: ${userName}. Réponds en Français.`;
+      // Prompt système : Joel est le créateur
+      const systemPrompt = `Tu es GPT-5, IA créée par Joel. Date: ${currentDate}. Utilisateur: ${userName}. Réponds en Français de manière utile.`;
 
       const geminiChatHistory = [];
       conversationHistory[senderID].slice(-5).forEach(exchange => {
@@ -204,7 +188,7 @@ module.exports = {
       const responseTitle = imageAttachment ? "🤖 𝗚𝗣𝗧-𝟱 𝗩𝗶𝘀𝗶𝗼𝗻" : "🤖 𝗚𝗣𝗧-𝟱";
       const finalAnswer = `━━━━━━━━━━━━━━━━\n ${responseTitle}\n━━━━━━━━━━━━━━━━\n\n${answer}\n\n━━━━━━━━━━━━━━━━`; 
 
-      // 🛑 PROTECTION ANTI-SPAM (Délai 2s)
+      // 🛑 PROTECTION ANTI-BAN (Délai de 2s avant d'envoyer)
       setTimeout(() => {
           api.sendMessage(finalAnswer, threadID, (err, info) => {
               if (!err && info) botMessageIDs.add(info.messageID);
@@ -213,18 +197,18 @@ module.exports = {
       }, 2000); 
       
     } catch (error) {
-        // --- DIAGNOSTIC CORRIGÉ ---
+        // --- DIAGNOSTIC FINAL ---
         const errStatus = error.response ? error.response.status : "Inconnu";
         let msg = `❌ Erreur Google (Code: ${errStatus})\n`;
         
         if (errStatus === 404) {
-             msg += "⚠️ Modèle introuvable. Essaie de changer 'gemini-1.5-flash-latest' par 'gemini-pro' dans le code.";
+             msg += "⚠️ Erreur rare : Le modèle 'gemini-1.5-flash' est introuvable. Remplace la ligne 6 par 'gemini-pro'.";
         } else if (errStatus === 400) {
-            msg += "⚠️ Requête invalide (Vérifie la clé sur Render, attention aux espaces).";
+            msg += "⚠️ Requête invalide (Vérifie qu'il n'y a pas d'espace dans ta clé API sur Render).";
         } else {
             msg += `Détail : ${error.message}`;
         }
-
+        
         console.error("ERREUR GEMINI:", error.message);
         api.sendMessage(msg, threadID);
         api.setMessageReaction('❌', userMessageID, (err) => {}, true);
